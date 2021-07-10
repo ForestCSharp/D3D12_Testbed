@@ -23,5 +23,5 @@ ipch
 *sdf
 
 #IDE folders
-.idea/*
-.vs/*
+.idea/
+.vs/
