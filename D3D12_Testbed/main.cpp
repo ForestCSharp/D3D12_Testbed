@@ -24,7 +24,7 @@ struct SceneConstantBuffer
 	XMFLOAT4 offset;
 };
 
-static const UINT frame_count = 3;
+static const UINT backbuffer_count = 3;
 
 #define HR_CHECK(expr)  \
 {\
@@ -160,8 +160,8 @@ int main()
 	HANDLE fence_event;
 	ComPtr<ID3D12Fence> fence;
 
-	UINT64 fence_values[frame_count];
-	memset(fence_values, 0, sizeof(UINT64) * frame_count);
+	UINT64 fence_values[backbuffer_count];
+	memset(fence_values, 0, sizeof(UINT64) * backbuffer_count);
 
 	// 3. Create a command queue
 	ComPtr<ID3D12CommandQueue> command_queue;
@@ -172,7 +172,7 @@ int main()
 
 	// 4. Create the swapchain and associate it with our window
 	DXGI_SWAP_CHAIN_DESC1 swap_chain_desc = {};
-	swap_chain_desc.BufferCount = frame_count;
+	swap_chain_desc.BufferCount = backbuffer_count;
 	swap_chain_desc.Width = width;
 	swap_chain_desc.Height = height;
 	swap_chain_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -199,7 +199,7 @@ int main()
 
 	// 5. Create descriptor heaps (1 per frame)
 	D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {};
-	rtv_heap_desc.NumDescriptors = frame_count;
+	rtv_heap_desc.NumDescriptors = backbuffer_count;
 	rtv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 	rtv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
 	ComPtr<ID3D12DescriptorHeap> rtv_descriptor_heap;
@@ -207,8 +207,8 @@ int main()
 
 	UINT rtv_heap_offset = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
-	array<ComPtr<ID3D12DescriptorHeap>, frame_count> cbv_descriptor_heaps;
-	for (uint32_t i = 0; i < frame_count; ++i)
+	array<ComPtr<ID3D12DescriptorHeap>, backbuffer_count> cbv_descriptor_heaps;
+	for (uint32_t i = 0; i < backbuffer_count; ++i)
 	{
 		D3D12_DESCRIPTOR_HEAP_DESC desc_heap_desc = {};
 		desc_heap_desc.NumDescriptors = 1;
@@ -217,14 +217,14 @@ int main()
 		HR_CHECK(device->CreateDescriptorHeap(&desc_heap_desc, IID_PPV_ARGS(&cbv_descriptor_heaps[i])));
 	}
 
-	array<ComPtr<ID3D12CommandAllocator>, frame_count> command_allocators;
-	array<ComPtr<ID3D12Resource>, frame_count> render_targets;
+	array<ComPtr<ID3D12CommandAllocator>, backbuffer_count> command_allocators;
+	array<ComPtr<ID3D12Resource>, backbuffer_count> render_targets;
 	// 6. Create render target views (1 per frame), associating them with corresponding rtv descriptor heaps
 	{
 		D3D12_CPU_DESCRIPTOR_HANDLE rtv_descriptor_handle(rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart());
 
 		// Create a render target view for each frame.
-		for (UINT current_frame_index = 0; current_frame_index < frame_count; current_frame_index++)
+		for (UINT current_frame_index = 0; current_frame_index < backbuffer_count; current_frame_index++)
 		{
 			HR_CHECK(swapchain->GetBuffer(current_frame_index, IID_PPV_ARGS(&render_targets[current_frame_index])));
 
@@ -276,8 +276,8 @@ int main()
 	// 9. Compile our vertex and pixel shaders
 	UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
 	ComPtr<ID3DBlob> vertex_shader, pixel_shader;
-	HR_CHECK(D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &vertex_shader, nullptr));
-	HR_CHECK(D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &pixel_shader, nullptr));
+	HR_CHECK(D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "vs_main", "vs_5_0", compileFlags, 0, &vertex_shader, nullptr));
+	HR_CHECK(D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "ps_main", "ps_5_0", compileFlags, 0, &pixel_shader, nullptr));
 
 	// 10. Define the vertex input layout.
 	D3D12_INPUT_ELEMENT_DESC input_element_descs[] =
@@ -350,14 +350,14 @@ int main()
 		XMFLOAT4 color;
 	};
 
-	Vertex triangle_vertices[] =
+	Vertex vertices[] =
 	{
 		{ { 0.0f, 0.25f, 0.0f }, { 1.0f, 0.0f, 0.0f, 1.0f } },
 		{ { 0.25f, -0.25f, 0.0f }, { 0.0f, 1.0f, 0.0f, 1.0f } },
 		{ { -0.25f, -0.25f, 0.0f }, { 0.0f, 0.0f, 1.0f, 1.0f } }
 	};
 
-	const UINT vertex_buffer_size = sizeof(triangle_vertices);
+	const UINT vertices_size = sizeof(vertices);
 
 	// Note: using upload heaps to transfer static data like vert buffers is not 
 	// recommended. Every time the GPU needs it, the upload heap will be marshalled 
@@ -373,7 +373,6 @@ int main()
 	D3D12_RESOURCE_DESC resource_desc = {};
 	resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
 	resource_desc.Alignment = 0;
-	resource_desc.Width = vertex_buffer_size;
 	resource_desc.Height = 1;
 	resource_desc.DepthOrArraySize = 1;
 	resource_desc.MipLevels = 1;
@@ -387,9 +386,14 @@ int main()
 	// recommended. Every time the GPU needs it, the upload heap will be marshalled 
 	// over. Please read up on Default Heap usage. An upload heap is used here for 
 	// code simplicity and because there are very few verts to actually transfer.
+	
 	D3D12MA::ALLOCATION_DESC alloc_desc = {};
 	alloc_desc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
 
+	//update resource desc to vertices_size
+	resource_desc.Width = vertices_size; 
+
+	//Create our vertex buffer	
 	ComPtr<ID3D12Resource> vertex_buffer;
 	D3D12MA::Allocation* vertex_buffer_allocation = nullptr;
 	HR_CHECK(gpu_memory_allocator->CreateResource(
@@ -401,27 +405,58 @@ int main()
 		IID_PPV_ARGS(&vertex_buffer)
 	));
 
+	D3D12_RANGE read_range = { 0, 0 }; // We do not intend to read from these reources on the CPU.
+
 	// Copy the triangle data to the vertex buffer.
-	UINT8* pVertexDataBegin;
-	D3D12_RANGE read_range = { 0, 0 }; // We do not intend to read from this resource on the CPU.
-	HR_CHECK(vertex_buffer->Map(0, &read_range, reinterpret_cast<void**>(&pVertexDataBegin)));
-	memcpy(pVertexDataBegin, triangle_vertices, sizeof(triangle_vertices));
+	UINT8* vertex_data_begin;
+	HR_CHECK(vertex_buffer->Map(0, &read_range, reinterpret_cast<void**>(&vertex_data_begin)));
+	memcpy(vertex_data_begin, vertices, vertices_size);
 	vertex_buffer->Unmap(0, nullptr);
 
-	// Initialize the vertex buffer view.
+	// Init the vertex buffer view.
 	D3D12_VERTEX_BUFFER_VIEW vertex_buffer_view;
 	vertex_buffer_view.BufferLocation = vertex_buffer->GetGPUVirtualAddress();
 	vertex_buffer_view.StrideInBytes = sizeof(Vertex);
-	vertex_buffer_view.SizeInBytes = vertex_buffer_size;
+	vertex_buffer_view.SizeInBytes = vertices_size;
+
+	UINT32 indices[] = {0,1,2};
+	UINT indices_size = sizeof(indices);
+
+	//update resource desc to indices_size
+	resource_desc.Width = indices_size;
+	
+	// Create our index buffer
+	ComPtr<ID3D12Resource> index_buffer;
+	D3D12MA::Allocation* index_buffer_allocation = nullptr;
+	HR_CHECK(gpu_memory_allocator->CreateResource(
+        &alloc_desc,
+        &resource_desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        &index_buffer_allocation,
+        IID_PPV_ARGS(&index_buffer)
+    ));
+
+	//Copy index data
+	UINT8* index_data_begin;
+	HR_CHECK(index_buffer->Map(0, &read_range, reinterpret_cast<void**>(&index_data_begin)));
+	memcpy(index_data_begin, indices, indices_size);
+	index_buffer->Unmap(0, nullptr);
+
+	//Init the index buffer view
+	D3D12_INDEX_BUFFER_VIEW index_buffer_view;
+	index_buffer_view.BufferLocation = index_buffer->GetGPUVirtualAddress();
+	index_buffer_view.SizeInBytes = indices_size;
+	index_buffer_view.Format = DXGI_FORMAT_R32_UINT;
 
 	// 14. Create Constant Buffer
 	resource_desc.Width = (sizeof(SceneConstantBuffer) + 255) & ~255;
 
-	array<ComPtr<ID3D12Resource>,frame_count> constant_buffers;
-	D3D12MA::Allocation* constant_buffer_allocations[frame_count];
-	UINT8* cbv_gpu_addresses[frame_count];
+	array<ComPtr<ID3D12Resource>,backbuffer_count> constant_buffers;
+	D3D12MA::Allocation* constant_buffer_allocations[backbuffer_count];
+	UINT8* cbv_gpu_addresses[backbuffer_count];
 
-	for (uint32_t i = 0; i < frame_count; ++i)
+	for (uint32_t i = 0; i < backbuffer_count; ++i)
 	{
 		ComPtr<ID3D12Resource>& constant_buffer = constant_buffers[i];
 
@@ -448,7 +483,7 @@ int main()
 
 	// Create synchronization objects and wait until assets have been uploaded to the GPU.
 	{
-		for (uint32_t i = 0; i < frame_count; ++i)
+		for (uint32_t i = 0; i < backbuffer_count; ++i)
 		{
 			fence_values[i] = 0;
 		}
@@ -535,8 +570,9 @@ int main()
 			command_list->ClearRenderTargetView(rtv_handle, clear_color, 0, nullptr);
 			command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 			command_list->IASetVertexBuffers(0, 1, &vertex_buffer_view);
-			command_list->DrawInstanced(3, 1, 0, 0);
-
+			command_list->IASetIndexBuffer(&index_buffer_view);
+			command_list->DrawIndexedInstanced(3, 1, 0, 0, 0);
+			
 			// Indicate that the back buffer will now be used to present.
 			D3D12_RESOURCE_BARRIER rt_to_present_barrier = transition_resource(render_targets[frame_index].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 			command_list->ResourceBarrier(1, &rt_to_present_barrier);
@@ -548,7 +584,9 @@ int main()
 			command_queue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
 
 			// Present the frame.
-			HR_CHECK(swapchain->Present(1, 0));
+			const bool vsync_enabled = true;
+			const UINT sync_interval = vsync_enabled ? 1 : 0;
+			HR_CHECK(swapchain->Present(sync_interval, 0));
 
 			{   // WaitForPreviousFrame...
 				// Signal and increment the fence value.
@@ -573,8 +611,9 @@ int main()
 	
 	{ //Free all memory allocated with D3D12 Memory Allocator
 		vertex_buffer_allocation->Release();
+		index_buffer_allocation->Release();
 
-		for (UINT i = 0; i < frame_count; ++i)
+		for (UINT i = 0; i < backbuffer_count; ++i)
 		{
 			constant_buffer_allocations[i]->Release();
 		}
