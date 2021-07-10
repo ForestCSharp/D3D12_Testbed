@@ -21,3 +21,7 @@ Release
 *.vbproj.user
 ipch
 *sdf
+
+#IDE folders
+.idea/*
+.vs/*
