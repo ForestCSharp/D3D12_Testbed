@@ -2,6 +2,7 @@
 #define WIN32_LEAN_AND_MEAN             // Exclude rarely-used stuff from Windows headers.
 #endif
 
+//Windows Libs
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
@@ -9,15 +10,17 @@
 #include <DirectXMath.h>
 #include <wrl.h>
 
+using Microsoft::WRL::ComPtr;
+using DirectX::XMFLOAT3;
+using DirectX::XMFLOAT4;
+
+//Std Lib
 #include <iostream>
 #include <array>
 using std::array;
 
+//D3D12 GPU Memory Allocator
 #include "D3D12MemAlloc/D3D12MemAlloc.h"
-
-using Microsoft::WRL::ComPtr;
-using DirectX::XMFLOAT3;
-using DirectX::XMFLOAT4;
 
 struct SceneConstantBuffer
 {
@@ -39,7 +42,7 @@ static const UINT backbuffer_count = 3;
 /*  Almost identical to CD3DX12_RESOURCE_BARRIER::Transition in d3dx12.h
 	(helper file provided by microsoft that we've opted to not use) */
 static D3D12_RESOURCE_BARRIER transition_resource(
-	_In_ ID3D12Resource* in_resource,
+	ID3D12Resource* in_resource,
 	const D3D12_RESOURCE_STATES state_before,
 	const D3D12_RESOURCE_STATES state_after,
 	const UINT subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
