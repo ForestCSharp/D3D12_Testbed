@@ -11,23 +11,19 @@
 #include <wrl.h>
 
 using Microsoft::WRL::ComPtr;
-using DirectX::XMFLOAT3;
-using DirectX::XMFLOAT4;
+using namespace DirectX;
 
 //Std Lib
 #include <iostream>
+#include <vector>
 #include <array>
 using std::array;
 
+//C
+#include "time.h"
+
 //D3D12 GPU Memory Allocator
 #include "D3D12MemAlloc/D3D12MemAlloc.h"
-
-struct SceneConstantBuffer
-{
-	XMFLOAT4 offset;
-};
-
-static const UINT backbuffer_count = 3;
 
 #define HR_CHECK(expr)  \
 {\
@@ -38,6 +34,117 @@ static const UINT backbuffer_count = 3;
 		exit(-1);\
 	}\
 }\
+
+struct SceneConstantBuffer
+{
+	XMMATRIX view_proj;
+};
+
+struct Vertex
+{
+	XMFLOAT3 position;
+	XMFLOAT4 color;
+};
+
+struct Mesh
+{
+	ComPtr<ID3D12Resource> vertex_buffer;
+	D3D12MA::Allocation* vertex_buffer_allocation = nullptr;
+	D3D12_VERTEX_BUFFER_VIEW vertex_buffer_view;
+	
+	ComPtr<ID3D12Resource> index_buffer;
+	D3D12MA::Allocation* index_buffer_allocation = nullptr;
+	D3D12_INDEX_BUFFER_VIEW index_buffer_view;
+
+	//FCS TODO: Template factory function, to take in different types of vertices
+	Mesh(D3D12MA::Allocator* gpu_memory_allocator, std::vector<Vertex> vertices, std::vector<UINT32> indices)
+	{
+		D3D12_RESOURCE_DESC resource_desc = {};
+		resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+		resource_desc.Alignment = 0;
+		resource_desc.Height = 1;
+		resource_desc.DepthOrArraySize = 1;
+		resource_desc.MipLevels = 1;
+		resource_desc.Format = DXGI_FORMAT_UNKNOWN;
+		resource_desc.SampleDesc.Count = 1;
+		resource_desc.SampleDesc.Quality = 0;
+		resource_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+		resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+		
+		// FCS TODO: Need to upload with upload heap, then copy over to D3D12_HEAP_TYPE_DEFAULT
+		
+		D3D12MA::ALLOCATION_DESC alloc_desc = {};
+		alloc_desc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+
+		const size_t vertices_size = sizeof(Vertex) * vertices.size();
+
+		//update resource desc to vertices_size
+		resource_desc.Width = vertices_size; 
+
+		//Create our vertex buffer	
+		HR_CHECK(gpu_memory_allocator->CreateResource(
+			&alloc_desc,
+			&resource_desc,
+			D3D12_RESOURCE_STATE_GENERIC_READ,
+			nullptr,
+			&vertex_buffer_allocation,
+			IID_PPV_ARGS(&vertex_buffer)
+		));
+
+		D3D12_RANGE read_range = { 0, 0 }; // We do not intend to read from these reources on the CPU.
+
+		// Copy the triangle data to the vertex buffer.
+		UINT8* vertex_data_begin;
+		HR_CHECK(vertex_buffer->Map(0, &read_range, reinterpret_cast<void**>(&vertex_data_begin)));
+		memcpy(vertex_data_begin, vertices.data(), vertices_size);
+		vertex_buffer->Unmap(0, nullptr);
+
+		// Init the vertex buffer view.
+		vertex_buffer_view.BufferLocation = vertex_buffer->GetGPUVirtualAddress();
+		vertex_buffer_view.StrideInBytes = sizeof(Vertex);
+		vertex_buffer_view.SizeInBytes = static_cast<UINT>(vertices_size);
+
+		const size_t indices_size = sizeof(UINT32) * indices.size();
+
+		//update resource desc to indices_size
+		resource_desc.Width = indices_size;
+		
+		// Create our index buffer
+		HR_CHECK(gpu_memory_allocator->CreateResource(
+	        &alloc_desc,
+	        &resource_desc,
+	        D3D12_RESOURCE_STATE_GENERIC_READ,
+	        nullptr,
+	        &index_buffer_allocation,
+	        IID_PPV_ARGS(&index_buffer)
+	    ));
+
+		//Copy index data
+		UINT8* index_data_begin;
+		HR_CHECK(index_buffer->Map(0, &read_range, reinterpret_cast<void**>(&index_data_begin)));
+		memcpy(index_data_begin, indices.data(), indices_size);
+		index_buffer->Unmap(0, nullptr);
+
+		//Init the index buffer view
+		index_buffer_view.BufferLocation = index_buffer->GetGPUVirtualAddress();
+		index_buffer_view.SizeInBytes = static_cast<UINT>(indices_size);
+		index_buffer_view.Format = DXGI_FORMAT_R32_UINT;
+	}
+
+	void release() const
+	{
+		if (vertex_buffer_allocation)
+		{
+			vertex_buffer_allocation->Release();
+		}
+		if (index_buffer_allocation)
+		{
+			index_buffer_allocation->Release();
+		}
+	}
+};
+
+static const UINT backbuffer_count = 3;
 
 /*  Almost identical to CD3DX12_RESOURCE_BARRIER::Transition in d3dx12.h
 	(helper file provided by microsoft that we've opted to not use) */
@@ -105,7 +212,7 @@ int main()
 
 	HWND window = CreateWindow(
 		window_class.lpszClassName,
-		L"D3D12_Testbed",
+		L"D3D12 Testbed",
 		WS_OVERLAPPEDWINDOW,
 		CW_USEDEFAULT,
 		CW_USEDEFAULT,
@@ -144,11 +251,7 @@ int main()
 		// Check to see if the adapter supports Direct3D 12, and create device if so
 		if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, _uuidof(ID3D12Device), nullptr)))
 		{
-			HR_CHECK(D3D12CreateDevice(
-				adapter.Get(),
-				D3D_FEATURE_LEVEL_12_0,
-				IID_PPV_ARGS(&device)
-			));
+			HR_CHECK(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&device)));
 			break;
 		}
 	}
@@ -341,49 +444,22 @@ int main()
 	HR_CHECK(device->CreateGraphicsPipelineState(&pso_desc, IID_PPV_ARGS(&pipeline_state)));
 
 	// 12. Create Command list using command allocator and pipeline state, and close it (we'll record it later)
-	//FCS TODO: one command_list per frame_index, do this in while loop!
+	//FCS TODO: one command_list per frame_index, build command_list per-frame
 	ComPtr<ID3D12GraphicsCommandList> command_list;
 	HR_CHECK(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocators[frame_index].Get(), pipeline_state.Get(), IID_PPV_ARGS(&command_list)));
 	HR_CHECK(command_list->Close());
 
 	// 13. Create The Vertex Buffer, copy vertices into it
-	struct Vertex
-	{
-		XMFLOAT3 position;
-		XMFLOAT4 color;
-	};
-
-	Vertex vertices[] =
+	std::vector<Vertex> vertices =
 	{
 		{ { 0.0f, 0.25f, 0.0f }, { 1.0f, 0.0f, 0.0f, 1.0f } },
 		{ { 0.25f, -0.25f, 0.0f }, { 0.0f, 1.0f, 0.0f, 1.0f } },
 		{ { -0.25f, -0.25f, 0.0f }, { 0.0f, 0.0f, 1.0f, 1.0f } }
 	};
 
-	const UINT vertices_size = sizeof(vertices);
+	std::vector<UINT32> indices = {0,1,2};
 
-	// Note: using upload heaps to transfer static data like vert buffers is not 
-	// recommended. Every time the GPU needs it, the upload heap will be marshalled 
-	// over. Please read up on Default Heap usage. An upload heap is used here for 
-	// code simplicity and because there are very few verts to actually transfer.
-	D3D12_HEAP_PROPERTIES upload_heap_properties = {};
-	upload_heap_properties.Type = D3D12_HEAP_TYPE_UPLOAD;
-	upload_heap_properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
-	upload_heap_properties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
-	upload_heap_properties.CreationNodeMask = 1;
-	upload_heap_properties.VisibleNodeMask = 1;
-
-	D3D12_RESOURCE_DESC resource_desc = {};
-	resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-	resource_desc.Alignment = 0;
-	resource_desc.Height = 1;
-	resource_desc.DepthOrArraySize = 1;
-	resource_desc.MipLevels = 1;
-	resource_desc.Format = DXGI_FORMAT_UNKNOWN;
-	resource_desc.SampleDesc.Count = 1;
-	resource_desc.SampleDesc.Quality = 0;
-	resource_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-	resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+	Mesh mesh(gpu_memory_allocator, vertices, indices);
 
 	// Note: using upload heaps to transfer static data like vert buffers is not 
 	// recommended. Every time the GPU needs it, the upload heap will be marshalled 
@@ -393,67 +469,19 @@ int main()
 	D3D12MA::ALLOCATION_DESC alloc_desc = {};
 	alloc_desc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
 
-	//update resource desc to vertices_size
-	resource_desc.Width = vertices_size; 
-
-	//Create our vertex buffer	
-	ComPtr<ID3D12Resource> vertex_buffer;
-	D3D12MA::Allocation* vertex_buffer_allocation = nullptr;
-	HR_CHECK(gpu_memory_allocator->CreateResource(
-		&alloc_desc,
-		&resource_desc,
-		D3D12_RESOURCE_STATE_GENERIC_READ,
-		nullptr,
-		&vertex_buffer_allocation,
-		IID_PPV_ARGS(&vertex_buffer)
-	));
-
-	D3D12_RANGE read_range = { 0, 0 }; // We do not intend to read from these reources on the CPU.
-
-	// Copy the triangle data to the vertex buffer.
-	UINT8* vertex_data_begin;
-	HR_CHECK(vertex_buffer->Map(0, &read_range, reinterpret_cast<void**>(&vertex_data_begin)));
-	memcpy(vertex_data_begin, vertices, vertices_size);
-	vertex_buffer->Unmap(0, nullptr);
-
-	// Init the vertex buffer view.
-	D3D12_VERTEX_BUFFER_VIEW vertex_buffer_view;
-	vertex_buffer_view.BufferLocation = vertex_buffer->GetGPUVirtualAddress();
-	vertex_buffer_view.StrideInBytes = sizeof(Vertex);
-	vertex_buffer_view.SizeInBytes = vertices_size;
-
-	UINT32 indices[] = {0,1,2};
-	UINT indices_size = sizeof(indices);
-
-	//update resource desc to indices_size
-	resource_desc.Width = indices_size;
-	
-	// Create our index buffer
-	ComPtr<ID3D12Resource> index_buffer;
-	D3D12MA::Allocation* index_buffer_allocation = nullptr;
-	HR_CHECK(gpu_memory_allocator->CreateResource(
-        &alloc_desc,
-        &resource_desc,
-        D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr,
-        &index_buffer_allocation,
-        IID_PPV_ARGS(&index_buffer)
-    ));
-
-	//Copy index data
-	UINT8* index_data_begin;
-	HR_CHECK(index_buffer->Map(0, &read_range, reinterpret_cast<void**>(&index_data_begin)));
-	memcpy(index_data_begin, indices, indices_size);
-	index_buffer->Unmap(0, nullptr);
-
-	//Init the index buffer view
-	D3D12_INDEX_BUFFER_VIEW index_buffer_view;
-	index_buffer_view.BufferLocation = index_buffer->GetGPUVirtualAddress();
-	index_buffer_view.SizeInBytes = indices_size;
-	index_buffer_view.Format = DXGI_FORMAT_R32_UINT;
-
 	// 14. Create Constant Buffer
-	resource_desc.Width = (sizeof(SceneConstantBuffer) + 255) & ~255;
+	D3D12_RESOURCE_DESC resource_desc = {};
+	resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+	resource_desc.Alignment = 0;
+	resource_desc.Width = (sizeof(SceneConstantBuffer)+ 255) & ~255;
+	resource_desc.Height = 1;
+	resource_desc.DepthOrArraySize = 1;
+	resource_desc.MipLevels = 1;
+	resource_desc.Format = DXGI_FORMAT_UNKNOWN;
+	resource_desc.SampleDesc.Count = 1;
+	resource_desc.SampleDesc.Quality = 0;
+	resource_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+	resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
 	array<ComPtr<ID3D12Resource>,backbuffer_count> constant_buffers;
 	D3D12MA::Allocation* constant_buffer_allocations[backbuffer_count];
@@ -480,6 +508,7 @@ int main()
 
 		// Map and initialize the constant buffer. We don't unmap this until the
 		// app closes. Keeping things mapped for the lifetime of the resource is okay.
+		D3D12_RANGE read_range = { 0, 0 }; // We do not intend to read from these reources on the CPU.
 		HR_CHECK(constant_buffer->Map(0, &read_range, reinterpret_cast<void**>(&cbv_gpu_addresses[i])));
 	}
 
@@ -514,10 +543,27 @@ int main()
 		}
 	}
 
-	SceneConstantBuffer constant_buffer_data = {};
+	XMVECTOR cam_pos	 = XMVectorSet(0.f, 0.f, -5.f, 1.f);
+	XMVECTOR cam_forward = XMVectorSet(0.f, 0.f, 1.f, 0.f);
+	XMVECTOR cam_up		 = XMVectorSet(0.f, 1.f, 0.f, 0.f);
 
+	SceneConstantBuffer scene_constant_buffer_data = {};
+
+	clock_t time = clock();
+	double accumulated_delta_time = 0.0f;
+	size_t frames_rendered = 0;
+	
 	while (!should_close)
 	{
+		//TODO: RenderTarget Resizing
+		
+		clock_t new_time = clock();
+		double delta_time = static_cast<double>(new_time - time) / CLOCKS_PER_SEC;
+		time = new_time;
+
+		accumulated_delta_time += delta_time;
+		frames_rendered++;
+		
 		if (is_key_down(VK_ESCAPE))
 		{
 			should_close = true;
@@ -532,15 +578,33 @@ int main()
 		}
 
 		{ //Rendering
-			const float translation_speed = 0.005f;
-			const float offset_bounds = 1.25f;
 
-			constant_buffer_data.offset.x += translation_speed;
-			if (constant_buffer_data.offset.x > offset_bounds)
-			{
-				constant_buffer_data.offset.x = -offset_bounds;
+			{	//Camera Control
+				const XMVECTOR cam_right = XMVector3Normalize(XMVector3Cross(cam_up, cam_forward));
+				
+				float translation_speed = 6.0f * static_cast<float>(delta_time);
+				if (is_key_down(VK_SHIFT))
+				{
+					translation_speed *= 10.0f;
+				}
+				
+				if (is_key_down('W')) { cam_pos += cam_forward * translation_speed; }
+				if (is_key_down('S')) { cam_pos -= cam_forward * translation_speed; }
+				if (is_key_down('D')) { cam_pos += cam_right   * translation_speed; }
+				if (is_key_down('A')) { cam_pos -= cam_right   * translation_speed; }
+				if (is_key_down('E')) { cam_pos += cam_up	   * translation_speed; }
+				if (is_key_down('Q')) { cam_pos -= cam_up	   * translation_speed; }
+
+				//FCS TODO: Cam Rotation Control
 			}
-			memcpy(cbv_gpu_addresses[frame_index], &constant_buffer_data, sizeof(constant_buffer_data));
+
+			XMVECTOR target = cam_pos + cam_forward;
+			auto view = XMMatrixLookAtLH(cam_pos, target, cam_up);
+			float fov_y = 45.0f * XM_PI / 180.0f;
+			float aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
+			auto proj = XMMatrixPerspectiveFovLH(fov_y, aspect_ratio, 0.01f, 100.0f);
+			scene_constant_buffer_data.view_proj = view * proj;
+			memcpy(cbv_gpu_addresses[frame_index], &scene_constant_buffer_data, sizeof(scene_constant_buffer_data));
 
 			HR_CHECK(command_allocators[frame_index]->Reset());
 
@@ -572,8 +636,8 @@ int main()
 			const float clear_color[] = { 0.0f, 0.1f, 0.2f, 1.0f };
 			command_list->ClearRenderTargetView(rtv_handle, clear_color, 0, nullptr);
 			command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-			command_list->IASetVertexBuffers(0, 1, &vertex_buffer_view);
-			command_list->IASetIndexBuffer(&index_buffer_view);
+			command_list->IASetVertexBuffers(0, 1, &mesh.vertex_buffer_view);
+			command_list->IASetIndexBuffer(&mesh.index_buffer_view);
 			command_list->DrawIndexedInstanced(3, 1, 0, 0, 0);
 			
 			// Indicate that the back buffer will now be used to present.
@@ -613,8 +677,7 @@ int main()
 
 	
 	{ //Free all memory allocated with D3D12 Memory Allocator
-		vertex_buffer_allocation->Release();
-		index_buffer_allocation->Release();
+		mesh.release();
 
 		for (UINT i = 0; i < backbuffer_count; ++i)
 		{
