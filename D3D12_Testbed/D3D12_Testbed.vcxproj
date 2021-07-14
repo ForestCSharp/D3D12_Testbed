@@ -226,6 +226,9 @@
   <ItemGroup>
     <ClInclude Include="D3D12MemAlloc\D3D12MemAlloc.h" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="brdf.hlsli" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

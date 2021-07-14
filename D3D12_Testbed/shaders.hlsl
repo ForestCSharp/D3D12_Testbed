@@ -9,6 +9,8 @@
 //
 //*********************************************************
 
+#include "brdf.hlsli"
+
 cbuffer SceneConstantBuffer : register(b0)
 {
     float4x4 view_proj;

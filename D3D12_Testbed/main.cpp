@@ -21,6 +21,7 @@ using std::array;
 
 //C
 #include "time.h"
+#include "gltf.h"
 
 //D3D12 GPU Memory Allocator
 #include "D3D12MemAlloc/D3D12MemAlloc.h"
@@ -40,10 +41,12 @@ struct SceneConstantBuffer
 	XMMATRIX view_proj;
 };
 
-struct Vertex
+struct GpuVertex
 {
 	XMFLOAT3 position;
+	// XMFLOAT3 normal; //TODO:
 	XMFLOAT4 color;
+	// XMFLOAT2 uv; //TODO:
 };
 
 struct Mesh
@@ -57,7 +60,7 @@ struct Mesh
 	D3D12_INDEX_BUFFER_VIEW index_buffer_view;
 
 	//FCS TODO: Template factory function, to take in different types of vertices
-	Mesh(D3D12MA::Allocator* gpu_memory_allocator, std::vector<Vertex> vertices, std::vector<UINT32> indices)
+	Mesh(D3D12MA::Allocator* gpu_memory_allocator, std::vector<GpuVertex> vertices, std::vector<UINT32> indices)
 	{
 		D3D12_RESOURCE_DESC resource_desc = {};
 		resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -76,7 +79,7 @@ struct Mesh
 		D3D12MA::ALLOCATION_DESC alloc_desc = {};
 		alloc_desc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
 
-		const size_t vertices_size = sizeof(Vertex) * vertices.size();
+		const size_t vertices_size = sizeof(GpuVertex) * vertices.size();
 
 		//update resource desc to vertices_size
 		resource_desc.Width = vertices_size; 
@@ -101,7 +104,7 @@ struct Mesh
 
 		// Init the vertex buffer view.
 		vertex_buffer_view.BufferLocation = vertex_buffer->GetGPUVirtualAddress();
-		vertex_buffer_view.StrideInBytes = sizeof(Vertex);
+		vertex_buffer_view.StrideInBytes = sizeof(GpuVertex);
 		vertex_buffer_view.SizeInBytes = static_cast<UINT>(vertices_size);
 
 		const size_t indices_size = sizeof(UINT32) * indices.size();
@@ -131,15 +134,17 @@ struct Mesh
 		index_buffer_view.Format = DXGI_FORMAT_R32_UINT;
 	}
 
-	void release() const
+	void release()
 	{
 		if (vertex_buffer_allocation)
 		{
 			vertex_buffer_allocation->Release();
+			vertex_buffer_allocation = nullptr;
 		}
 		if (index_buffer_allocation)
 		{
 			index_buffer_allocation->Release();
+			index_buffer_allocation = nullptr;
 		}
 	}
 };
@@ -382,8 +387,8 @@ int main()
 	// 9. Compile our vertex and pixel shaders
 	UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
 	ComPtr<ID3DBlob> vertex_shader, pixel_shader;
-	HR_CHECK(D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "vs_main", "vs_5_0", compileFlags, 0, &vertex_shader, nullptr));
-	HR_CHECK(D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "ps_main", "ps_5_0", compileFlags, 0, &pixel_shader, nullptr));
+	HR_CHECK(D3DCompileFromFile(L"shaders.hlsl", nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "vs_main", "vs_5_0", compileFlags, 0, &vertex_shader, nullptr));
+	HR_CHECK(D3DCompileFromFile(L"shaders.hlsl", nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "ps_main", "ps_5_0", compileFlags, 0, &pixel_shader, nullptr));
 
 	// 10. Define the vertex input layout.
 	D3D12_INPUT_ELEMENT_DESC input_element_descs[] =
@@ -449,17 +454,70 @@ int main()
 	HR_CHECK(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocators[frame_index].Get(), pipeline_state.Get(), IID_PPV_ARGS(&command_list)));
 	HR_CHECK(command_list->Close());
 
-	// 13. Create The Vertex Buffer, copy vertices into it
-	std::vector<Vertex> vertices =
+	GltfAsset gltf_asset;
+	if (!gltf_load_asset("data/meshes/monkey.glb", &gltf_asset))
 	{
-		{ { 0.0f, 0.25f, 0.0f }, { 1.0f, 0.0f, 0.0f, 1.0f } },
-		{ { 0.25f, -0.25f, 0.0f }, { 0.0f, 1.0f, 0.0f, 1.0f } },
-		{ { -0.25f, -0.25f, 0.0f }, { 0.0f, 0.0f, 1.0f, 1.0f } }
-	};
+		std::cout << "FAILED TO LOAD GLTF ASSET" << std::endl;
+		exit(1);
+	}
+	assert(gltf_asset.num_meshes > 0);
 
-	std::vector<UINT32> indices = {0,1,2};
+	std::vector<Mesh> meshes;
+	GltfMesh* gltf_mesh = &gltf_asset.meshes[0];
+	for (uint32_t i = 0; i < gltf_mesh->num_primitives; ++i)
+	{
+		std::vector<GpuVertex> vertices;
+		std::vector<UINT32> indices;
+		
+		GltfPrimitive* primitive = &gltf_mesh->primitives[i];
+	
+		//Vertices
+		uint8_t* positions_buffer = primitive->positions->buffer_view->buffer->data;
+		positions_buffer += gltf_accessor_get_initial_offset(primitive->positions);
+		uint32_t positions_byte_stride = gltf_accessor_get_stride(primitive->positions);
+	
+		uint8_t* normals_buffer = primitive->normals->buffer_view->buffer->data;
+		normals_buffer += gltf_accessor_get_initial_offset(primitive->normals);
+		uint32_t normals_byte_stride = gltf_accessor_get_stride(primitive->normals);
+	
+		uint8_t* uvs_buffer = primitive->texcoord0->buffer_view->buffer->data;
+		uvs_buffer += gltf_accessor_get_initial_offset(primitive->texcoord0);
+		uint32_t uvs_byte_stride = gltf_accessor_get_stride(primitive->texcoord0);
+	
+		uint32_t vertices_count = primitive->positions->count;
+		vertices.reserve(vertices_count);
+	
+		for (uint32_t _i = 0; _i < vertices_count; ++_i) {
+			GpuVertex vertex;
+			memcpy(&vertex.position, positions_buffer, positions_byte_stride);
+			// memcpy(&vertex.normal, normals_buffer, normals_byte_stride); //TODO:
+			vertex.color = XMFLOAT4(0.8f, 0.2f, 0.2f, 1.0f);
+			// memcpy(&vertex.uv, uvs_buffer, uvs_byte_stride); //TODO:
+		
+			positions_buffer += positions_byte_stride;
+			normals_buffer += normals_byte_stride;
+			uvs_buffer += uvs_byte_stride;
+	
+			vertices.push_back(vertex);
+		}
+	
+		//Indices
+		uint8_t* indices_buffer = primitive->indices->buffer_view->buffer->data;
+		indices_buffer += gltf_accessor_get_initial_offset(primitive->indices);
+		uint32_t indices_byte_stride = gltf_accessor_get_stride(primitive->indices);
+	
+		uint32_t indices_count = primitive->indices->count;
+		indices.reserve(indices_count);
+	
+		for (uint32_t _i = 0; _i < indices_count; ++_i) {
+			UINT32 index = 0; //Need to init for memcpy
+			memcpy(&index, indices_buffer, indices_byte_stride);
+			indices_buffer += indices_byte_stride;
+			indices.push_back(index);
+		}
 
-	Mesh mesh(gpu_memory_allocator, vertices, indices);
+		meshes.emplace_back(Mesh(gpu_memory_allocator, vertices, indices));
+	}
 
 	// Note: using upload heaps to transfer static data like vert buffers is not 
 	// recommended. Every time the GPU needs it, the upload heap will be marshalled 
@@ -543,8 +601,8 @@ int main()
 		}
 	}
 
-	XMVECTOR cam_pos	 = XMVectorSet(0.f, 0.f, -5.f, 1.f);
-	XMVECTOR cam_forward = XMVectorSet(0.f, 0.f, 1.f, 0.f);
+	XMVECTOR cam_pos	 = XMVectorSet(0.f, 0.f, 5.f, 1.f);
+	XMVECTOR cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);
 	XMVECTOR cam_up		 = XMVectorSet(0.f, 1.f, 0.f, 0.f);
 
 	SceneConstantBuffer scene_constant_buffer_data = {};
@@ -585,7 +643,7 @@ int main()
 				float translation_speed = 6.0f * static_cast<float>(delta_time);
 				if (is_key_down(VK_SHIFT))
 				{
-					translation_speed *= 10.0f;
+					translation_speed *= 5.0f;
 				}
 				
 				if (is_key_down('W')) { cam_pos += cam_forward * translation_speed; }
@@ -636,9 +694,13 @@ int main()
 			const float clear_color[] = { 0.0f, 0.1f, 0.2f, 1.0f };
 			command_list->ClearRenderTargetView(rtv_handle, clear_color, 0, nullptr);
 			command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-			command_list->IASetVertexBuffers(0, 1, &mesh.vertex_buffer_view);
-			command_list->IASetIndexBuffer(&mesh.index_buffer_view);
-			command_list->DrawIndexedInstanced(3, 1, 0, 0, 0);
+			for (Mesh& mesh : meshes)
+			{
+				command_list->IASetVertexBuffers(0, 1, &mesh.vertex_buffer_view);
+				command_list->IASetIndexBuffer(&mesh.index_buffer_view);
+				UINT num_indices = mesh.index_buffer_view.SizeInBytes / sizeof(UINT32);
+				command_list->DrawIndexedInstanced(num_indices, 1, 0, 0, 0);
+			}
 			
 			// Indicate that the back buffer will now be used to present.
 			D3D12_RESOURCE_BARRIER rt_to_present_barrier = transition_resource(render_targets[frame_index].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
@@ -677,7 +739,10 @@ int main()
 
 	
 	{ //Free all memory allocated with D3D12 Memory Allocator
-		mesh.release();
+		for (Mesh& mesh : meshes)
+		{
+			mesh.release();
+		}
 
 		for (UINT i = 0; i < backbuffer_count; ++i)
 		{
