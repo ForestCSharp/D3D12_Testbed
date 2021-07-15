@@ -36,6 +36,23 @@ using std::array;
 	}\
 }\
 
+ComPtr<ID3DBlob> compile_shader(const LPCWSTR file_name, const LPCSTR entry_point, const LPCSTR target)
+{
+	const UINT shader_compile_flags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+
+	ComPtr<ID3DBlob> out_shader;
+	ID3DBlob* error_messages;
+	const HRESULT hr = D3DCompileFromFile(file_name, nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, entry_point, target, shader_compile_flags, 0, &out_shader, &error_messages);
+
+	if (FAILED(hr) && error_messages)
+	{
+		const char* error_message = static_cast<const char*>(error_messages->GetBufferPointer());
+		std::cout << error_message << std::endl;
+	}
+
+	return out_shader;
+}
+
 struct SceneConstantBuffer
 {
 	XMMATRIX view_proj;
@@ -385,10 +402,10 @@ int main()
 	}
 
 	// 9. Compile our vertex and pixel shaders
-	UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-	ComPtr<ID3DBlob> vertex_shader, pixel_shader;
-	HR_CHECK(D3DCompileFromFile(L"shaders.hlsl", nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "vs_main", "vs_5_0", compileFlags, 0, &vertex_shader, nullptr));
-	HR_CHECK(D3DCompileFromFile(L"shaders.hlsl", nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "ps_main", "ps_5_0", compileFlags, 0, &pixel_shader, nullptr));
+	ComPtr<ID3DBlob> vertex_shader = compile_shader(L"shaders.hlsl", "vs_main", "vs_5_0");
+	ComPtr<ID3DBlob> pixel_shader  = compile_shader(L"shaders.hlsl", "ps_main", "ps_5_0");
+
+	assert(vertex_shader && pixel_shader);
 
 	// 10. Define the vertex input layout.
 	D3D12_INPUT_ELEMENT_DESC input_element_descs[] =
@@ -455,7 +472,7 @@ int main()
 	HR_CHECK(command_list->Close());
 
 	GltfAsset gltf_asset;
-	if (!gltf_load_asset("data/meshes/monkey.glb", &gltf_asset))
+	if (!gltf_load_asset("data/meshes/LunaMoth.glb", &gltf_asset))
 	{
 		std::cout << "FAILED TO LOAD GLTF ASSET" << std::endl;
 		exit(1);

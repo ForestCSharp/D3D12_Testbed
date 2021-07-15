@@ -9,22 +9,26 @@
 //
 //*********************************************************
 
-#include "brdf.hlsli"
+#include "brdf_main.hlsli"
 
 cbuffer SceneConstantBuffer : register(b0)
 {
     float4x4 view_proj;
+    //TODO: vars for PBR
+    //TODO: light_array
 };
 
-struct PSInput
+//TODO: InstanceConstantBuffer
+
+struct PsInput
 {
     float4 position : SV_POSITION;
     float4 color : COLOR;
 };
 
-PSInput vs_main(float4 position : POSITION, float4 color : COLOR)
+PsInput vs_main(const float4 position : POSITION, const float4 color : COLOR)
 {
-    PSInput result;
+    PsInput result;
 
     result.position = mul(view_proj, position);
     result.color = color;
@@ -32,7 +36,7 @@ PSInput vs_main(float4 position : POSITION, float4 color : COLOR)
     return result;
 }
 
-float4 ps_main(PSInput input) : SV_TARGET
+float4 ps_main(const PsInput input) : SV_TARGET
 {
     return input.color;
 }
