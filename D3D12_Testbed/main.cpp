@@ -510,7 +510,7 @@ int main()
 			GpuVertex vertex;
 			memcpy(&vertex.position, positions_buffer, positions_byte_stride);
 			memcpy(&vertex.normal, normals_buffer, normals_byte_stride);
-			vertex.color = XMFLOAT4(0.2f, 0.2f, 0.2f, 1.0f);
+			vertex.color = XMFLOAT4(1.f, 1.f, 1.f, 1.0f);
 			// memcpy(&vertex.uv, uvs_buffer, uvs_byte_stride); //TODO:
 		
 			positions_buffer += positions_byte_stride;

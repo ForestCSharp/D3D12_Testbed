@@ -1,86 +1,94 @@
 
-// Specular BRDF //
+static const float PI = 3.14159265359;
 
-static const float PI = 3.14159265f;
-
-// distribution
-float fr_d_ggx(const float roughness, const float n_dot_h)
+float distribution_ggx(const float n_dot_h, const float roughness)
 {
-    const float one_minus_n_dot_h_squared = 1.0 - n_dot_h * n_dot_h;
-    const float a = n_dot_h * roughness;
-    const float k = roughness / (one_minus_n_dot_h_squared + a * a);
-    const float d = k * k * (1.0 / PI);
-    return d;
+    const float a = roughness*roughness;
+    const float a2 = a*a;
+    const float n_dot_h_squared = n_dot_h*n_dot_h;
+
+    const float nom   = a2;
+    float denom = (n_dot_h_squared * (a2 - 1.0) + 1.0);
+    denom = PI * denom * denom;
+
+    return nom / max(denom, 0.0000001); // prevent divide by zero for roughness=0.0 and NdotH=1.0
 }
 
-// visibility
-float fr_v_smith_ggx_correlated(const float roughness, const float n_dot_v, const float n_dot_l)
+float geometry_schlick_ggx(const float n_dot_v, const float roughness)
 {
-    const float a2 = roughness * roughness;
-    const float lambda_v = n_dot_l * sqrt((n_dot_v - a2 * n_dot_v) * n_dot_v + a2);
-    const float lambda_l = n_dot_v * sqrt((n_dot_l - a2 * n_dot_l) * n_dot_l + a2);
-    const float v = 0.5 / (lambda_v + lambda_l);
-    return v;
+    const float r = roughness + 1.0;
+    const float k = (r*r) / 8.0;
+
+    const float nom   = n_dot_v;
+    const float denom = n_dot_v * (1.0 - k) + k;
+
+    return nom / denom;
 }
 
-// TODO: specular fresnel
-
-float3 isotropic_lobe(const float roughness, const float n_dot_h, const float n_dot_v, const float n_dot_l)
+float geometry_smith(const float n_dot_v, const float n_dot_l, const float roughness)
 {
-    const float distribution = fr_d_ggx(roughness, n_dot_h);
-    const float visibility = fr_v_smith_ggx_correlated(roughness, n_dot_v, n_dot_l);
-    // vec3  F = fresnel(pixel.f0, LoH); //TODO:
-    return (distribution * visibility) /* * fresnel */;
+    const float ggx2 = geometry_schlick_ggx(n_dot_v, roughness);
+    const float ggx1 = geometry_schlick_ggx(n_dot_l, roughness);
+    return ggx1 * ggx2;
 }
 
-float3 specular_lobe(const float roughness, const float n_dot_h, const float n_dot_v, const float n_dot_l)
+float3 fresnel_schlick(const float cos_theta, const float3 f0)
 {
-    //TODO: anistropic_lobe option?
-    return isotropic_lobe(roughness, n_dot_h, n_dot_v, n_dot_l);
+    return f0 + (1.0 - f0) * pow(max(1.0 - cos_theta, 0.0), 5.0);
 }
+
 
 // Diffuse BRDF //
+#define MIN_N_DOT_V 1e-4
 
-float fd_burley_shlick(const float f0, const float f90, const float VoH) {
-    return f0 + (f90 - f0) * pow(1.0 - VoH, 5.0);
-}
-
-float fd_burley(const float roughness, const float n_dot_v, const float n_dot_l, const float l_dot_h)
-{
-    // Burley 2012, "Physically-Based Shading at Disney"
-    const float f90 = 0.5 + 2.0 * roughness * l_dot_h * l_dot_h;
-    const float light_scatter = fd_burley_shlick(1.0, f90, n_dot_l);
-    const float view_scatter  = fd_burley_shlick(1.0, f90, n_dot_v);
-    return light_scatter * view_scatter * (1.0 / PI);
-}
-
-float3 diffuse_lobe(const float3 diffuse_color, const float roughness, const float n_dot_v, const float n_dot_l, const float l_dot_h)
-{
-    return diffuse_color * fd_burley(roughness, n_dot_v, n_dot_l, l_dot_h);
+float clamp_n_dot_v(const float n_dot_v) {
+    // Neubelt and Pettineo 2013, "Crafting a Next-gen Material Pipeline for The Order: 1886"
+    return max(n_dot_v, MIN_N_DOT_V);
 }
 
 // Main BRDF Function //
 //  n	Surface normal unit vector
-//  l	Incident light unit vector (from light to surface) //FCS TODO: is this right
+//  l	Incident light unit vector (from surface to light)
 //  v	View unit vector (from surface to eye)
 //  h	Half unit vector between l and v
-float3 brdf_main(const float3 n, const float3 l, const float3 v, const float3 diffuse_color, const float3 f0, const float roughness)
+float4 brdf_main(const float3 n, const float3 l, const float3 v, const float3 albedo, const float3 f0, const float roughness, const float metallic, const float3 radiance)
 {
-    const float3 h = normalize(l + v);
-    
-    const float n_dot_l = dot(n,l);
-    const float n_dot_v = dot(n,v);
-    const float n_dot_h = dot(n,h);
-    
-    const float l_dot_h = dot(l,h);
+    const float3 h = normalize(v + l);
 
-    //TODO: Remap roughness -> roughness * roughness
+    const float n_dot_v = saturate(dot(n,v));   
+    const float n_dot_l = saturate(dot(n,l));
+    const float n_dot_h = saturate(dot(n,h));
 
-    const float3 specular = specular_lobe(roughness, n_dot_h, n_dot_v, n_dot_l);
-    const float3 diffuse = diffuse_lobe(diffuse_color, roughness, n_dot_v, n_dot_l, l_dot_h);
+    const float h_dot_v = saturate(dot(h,v));
 
-    //TODO: light attenuation arg
-    const float light_attenuation = 0.1f;
+    const float  ndf  = distribution_ggx(n_dot_h, roughness);   
+    const float  g    = geometry_smith(n_dot_v, n_dot_l, roughness); 
+    const float3 f    = fresnel_schlick(h_dot_v, f0);
+           
+    const float3 numerator  = ndf * g * f; 
+    const float denominator = 4 * n_dot_v * n_dot_l;
+    const float3 specular   = numerator / max(denominator, 0.001); // prevent divide by zero for NdotV=0.0 or NdotL=0.0
+
+    // kS is equal to Fresnel
+    const float3 ks = f;
+    // for energy conservation, the diffuse and specular light can't
+    // be above 1.0 (unless the surface emits light); to preserve this
+    // relationship the diffuse component (kD) should equal 1.0 - kS.
+    float3 kd = float3(1,1,1) - ks;
+    // multiply kD by the inverse metalness such that only non-metals 
+    // have diffuse lighting, or a linear blend if partly metal (pure metals
+    // have no diffuse light).
+    kd *= 1.0 - metallic;
+
+    float3 out_color = (kd * albedo / PI + specular) * radiance * n_dot_l;
+
+    //TODO: Pull tonemap and gamma correct out of brdf
+    // HDR tonemapping
+    out_color = out_color / (out_color + float3(1,1,1));
     
-    return (specular + diffuse) * light_attenuation;
+    // gamma correct
+    float gamma_factor = 1.0/2.2;
+    out_color = pow(out_color, float3(gamma_factor, gamma_factor, gamma_factor));
+    
+    return float4(out_color, 1.f);
 }
