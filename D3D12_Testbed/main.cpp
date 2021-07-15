@@ -56,12 +56,13 @@ ComPtr<ID3DBlob> compile_shader(const LPCWSTR file_name, const LPCSTR entry_poin
 struct SceneConstantBuffer
 {
 	XMMATRIX view_proj;
+	XMVECTOR view_pos;
 };
 
 struct GpuVertex
 {
 	XMFLOAT3 position;
-	// XMFLOAT3 normal; //TODO:
+	XMFLOAT3 normal; //TODO:
 	XMFLOAT4 color;
 	// XMFLOAT2 uv; //TODO:
 };
@@ -384,7 +385,7 @@ int main()
 		root_parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
 		root_parameter.DescriptorTable.NumDescriptorRanges = 1;
 		root_parameter.DescriptorTable.pDescriptorRanges = &range;
-		root_parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+		root_parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
 		D3D12_VERSIONED_ROOT_SIGNATURE_DESC root_signature_desc = {};
 		root_signature_desc.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
@@ -411,7 +412,8 @@ int main()
 	D3D12_INPUT_ELEMENT_DESC input_element_descs[] =
 	{
 		{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-		{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+		{ "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+		{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
 	};
 
 	// 11. Create Graphics Pipeline State Object
@@ -459,7 +461,7 @@ int main()
 	pso_desc.SampleMask = UINT_MAX;
 	pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 	pso_desc.NumRenderTargets = 1;
-	pso_desc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+	pso_desc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM; //FCS TODO: Issue in RenderDoc
 	pso_desc.SampleDesc.Count = 1;
 
 	ComPtr<ID3D12PipelineState> pipeline_state;
@@ -472,7 +474,7 @@ int main()
 	HR_CHECK(command_list->Close());
 
 	GltfAsset gltf_asset;
-	if (!gltf_load_asset("data/meshes/LunaMoth.glb", &gltf_asset))
+	if (!gltf_load_asset("data/meshes/sphere.glb", &gltf_asset))
 	{
 		std::cout << "FAILED TO LOAD GLTF ASSET" << std::endl;
 		exit(1);
@@ -507,8 +509,8 @@ int main()
 		for (uint32_t _i = 0; _i < vertices_count; ++_i) {
 			GpuVertex vertex;
 			memcpy(&vertex.position, positions_buffer, positions_byte_stride);
-			// memcpy(&vertex.normal, normals_buffer, normals_byte_stride); //TODO:
-			vertex.color = XMFLOAT4(0.8f, 0.2f, 0.2f, 1.0f);
+			memcpy(&vertex.normal, normals_buffer, normals_byte_stride);
+			vertex.color = XMFLOAT4(0.2f, 0.2f, 0.2f, 1.0f);
 			// memcpy(&vertex.uv, uvs_buffer, uvs_byte_stride); //TODO:
 		
 			positions_buffer += positions_byte_stride;
@@ -586,7 +588,6 @@ int main()
 		D3D12_RANGE read_range = { 0, 0 }; // We do not intend to read from these reources on the CPU.
 		HR_CHECK(constant_buffer->Map(0, &read_range, reinterpret_cast<void**>(&cbv_gpu_addresses[i])));
 	}
-
 
 	// Create synchronization objects and wait until assets have been uploaded to the GPU.
 	{
@@ -679,6 +680,7 @@ int main()
 			float aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
 			auto proj = XMMatrixPerspectiveFovLH(fov_y, aspect_ratio, 0.01f, 100.0f);
 			scene_constant_buffer_data.view_proj = view * proj;
+			scene_constant_buffer_data.view_pos = cam_pos;
 			memcpy(cbv_gpu_addresses[frame_index], &scene_constant_buffer_data, sizeof(scene_constant_buffer_data));
 
 			HR_CHECK(command_allocators[frame_index]->Reset());
