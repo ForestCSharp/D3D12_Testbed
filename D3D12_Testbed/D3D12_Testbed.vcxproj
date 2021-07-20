@@ -225,6 +225,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="D3D12MemAlloc\D3D12MemAlloc.h" />
+    <ClInclude Include="gltf.h" />
+    <ClInclude Include="stb_image.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="brdf_main.hlsli" />

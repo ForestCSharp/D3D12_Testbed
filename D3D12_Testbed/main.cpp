@@ -21,7 +21,13 @@ using std::array;
 
 //C
 #include "time.h"
+
+//GLB Loader
 #include "gltf.h"
+
+//STB Image
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 
 //D3D12 GPU Memory Allocator
 #include "D3D12MemAlloc/D3D12MemAlloc.h"
@@ -55,8 +61,9 @@ ComPtr<ID3DBlob> compile_shader(const LPCWSTR file_name, const LPCSTR entry_poin
 
 struct SceneConstantBuffer
 {
-	XMMATRIX view_proj;
-	XMVECTOR view_pos;
+	XMMATRIX view;
+	XMMATRIX proj;
+	XMVECTOR cam_pos;
 };
 
 struct GpuVertex
@@ -326,7 +333,7 @@ int main()
 	
 	UINT frame_index = swapchain->GetCurrentBackBufferIndex();
 
-	// 5. Create descriptor heaps (1 per frame)
+	// 5. Create descriptor heaps (1 per frame for CBV desc heaps)
 	D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {};
 	rtv_heap_desc.NumDescriptors = backbuffer_count;
 	rtv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
@@ -335,7 +342,7 @@ int main()
 	HR_CHECK(device->CreateDescriptorHeap(&rtv_heap_desc, IID_PPV_ARGS(&rtv_descriptor_heap)));
 
 	UINT rtv_heap_offset = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-
+	
 	array<ComPtr<ID3D12DescriptorHeap>, backbuffer_count> cbv_descriptor_heaps;
 	for (uint32_t i = 0; i < backbuffer_count; ++i)
 	{
@@ -345,6 +352,53 @@ int main()
 		desc_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 		HR_CHECK(device->CreateDescriptorHeap(&desc_heap_desc, IID_PPV_ARGS(&cbv_descriptor_heaps[i])));
 	}
+
+	// Create Depth Buffer
+	D3D12_DESCRIPTOR_HEAP_DESC depth_heap_desc = {};
+	depth_heap_desc.NumDescriptors = 1;
+	depth_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+	depth_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+	ComPtr<ID3D12DescriptorHeap> depth_descriptor_heap;
+	HR_CHECK(device->CreateDescriptorHeap(&depth_heap_desc, IID_PPV_ARGS(&depth_descriptor_heap)));
+
+	D3D12MA::ALLOCATION_DESC depth_alloc_desc = {};
+	depth_alloc_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+	D3D12_RESOURCE_DESC depth_resource_desc = {};
+	depth_resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+	depth_resource_desc.Alignment = 0;
+	depth_resource_desc.Width = width;
+	depth_resource_desc.Height = height;
+	depth_resource_desc.DepthOrArraySize = 1;
+	depth_resource_desc.MipLevels = 1;
+	depth_resource_desc.Format = DXGI_FORMAT_D32_FLOAT;
+	depth_resource_desc.SampleDesc.Count = 1;
+	depth_resource_desc.SampleDesc.Quality = 0;
+	depth_resource_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+	depth_resource_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+	D3D12_CLEAR_VALUE depth_clear_value = {};
+	depth_clear_value.Format = DXGI_FORMAT_D32_FLOAT;
+	depth_clear_value.DepthStencil.Depth = 1.0f;
+	depth_clear_value.DepthStencil.Stencil = 0;
+
+	ComPtr<ID3D12Resource> depth_texture;
+	D3D12MA::Allocation* depth_texture_allocation = nullptr;
+	gpu_memory_allocator->CreateResource(
+		&depth_alloc_desc,
+		&depth_resource_desc,
+		D3D12_RESOURCE_STATE_DEPTH_WRITE,
+		&depth_clear_value,
+		&depth_texture_allocation,
+		IID_PPV_ARGS(&depth_texture)
+	);
+
+	D3D12_DEPTH_STENCIL_VIEW_DESC dsv_desc = {};
+	dsv_desc.Format = DXGI_FORMAT_D32_FLOAT;
+	dsv_desc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+	dsv_desc.Flags = D3D12_DSV_FLAG_NONE;
+
+	device->CreateDepthStencilView(depth_texture.Get(), &dsv_desc, depth_descriptor_heap->GetCPUDescriptorHandleForHeapStart());
 
 	array<ComPtr<ID3D12CommandAllocator>, backbuffer_count> command_allocators;
 	array<ComPtr<ID3D12Resource>, backbuffer_count> render_targets;
@@ -456,12 +510,16 @@ int main()
 	}
 
 	// 11. D. Disable Depth,Stencil Tests, Set Primitive Topology, describe render target formats
-	pso_desc.DepthStencilState.DepthEnable = FALSE;
+	pso_desc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+	pso_desc.DepthStencilState.DepthEnable = TRUE;
+	pso_desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+	pso_desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
 	pso_desc.DepthStencilState.StencilEnable = FALSE;
+	
 	pso_desc.SampleMask = UINT_MAX;
 	pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 	pso_desc.NumRenderTargets = 1;
-	pso_desc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM; //FCS TODO: Issue in RenderDoc
+	pso_desc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
 	pso_desc.SampleDesc.Count = 1;
 
 	ComPtr<ID3D12PipelineState> pipeline_state;
@@ -619,7 +677,7 @@ int main()
 		}
 	}
 
-	XMVECTOR cam_pos	 = XMVectorSet(0.f, 0.f, 5.f, 1.f);
+	XMVECTOR cam_pos	 = XMVectorSet(0.f, -10.f, 30.f, 1.f);
 	XMVECTOR cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);
 	XMVECTOR cam_up		 = XMVectorSet(0.f, 1.f, 0.f, 0.f);
 
@@ -674,13 +732,16 @@ int main()
 				//FCS TODO: Cam Rotation Control
 			}
 
+			//FCS TODO: FIXME: Bad matrix multiplies messing with depth test?
+
 			XMVECTOR target = cam_pos + cam_forward;
-			auto view = XMMatrixLookAtLH(cam_pos, target, cam_up);
-			float fov_y = 45.0f * XM_PI / 180.0f;
+			scene_constant_buffer_data.view = XMMatrixLookAtLH(cam_pos, target, cam_up);
+
+			float fov_y = 45.0f;// * XM_PI / 180.0f;
 			float aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
-			auto proj = XMMatrixPerspectiveFovLH(fov_y, aspect_ratio, 0.01f, 100.0f);
-			scene_constant_buffer_data.view_proj = view * proj;
-			scene_constant_buffer_data.view_pos = cam_pos;
+			scene_constant_buffer_data.proj = XMMatrixPerspectiveFovLH(fov_y, aspect_ratio, 0.01f, 1000.0f);
+			
+			scene_constant_buffer_data.cam_pos = cam_pos;
 			memcpy(cbv_gpu_addresses[frame_index], &scene_constant_buffer_data, sizeof(scene_constant_buffer_data));
 
 			HR_CHECK(command_allocators[frame_index]->Reset());
@@ -695,7 +756,13 @@ int main()
 
 			command_list->SetGraphicsRootDescriptorTable(0, cbv_descriptor_heaps[frame_index]->GetGPUDescriptorHandleForHeapStart());
 
-			D3D12_VIEWPORT viewport = { 0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height) };
+			D3D12_VIEWPORT viewport = {};
+			viewport.TopLeftX = 0.0f;
+			viewport.TopLeftY = 0.0f;
+			viewport.Width = static_cast<float>(width);
+			viewport.Height = static_cast<float>(height);
+			viewport.MinDepth = 0.0f;
+			viewport.MaxDepth = 1.0f;
 			command_list->RSSetViewports(1, &viewport);
 
 			D3D12_RECT scissor_rect = { 0, 0, static_cast<LONG>(width), static_cast<LONG>(height) };
@@ -707,9 +774,13 @@ int main()
 
 			D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
 			rtv_handle.ptr += frame_index * rtv_heap_offset;
-			command_list->OMSetRenderTargets(1, &rtv_handle, FALSE, nullptr);
 			
+			D3D12_CPU_DESCRIPTOR_HANDLE depth_handle = depth_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
+
 			// Record commands.
+			command_list->OMSetRenderTargets(1, &rtv_handle, FALSE, &depth_handle);
+			command_list->ClearDepthStencilView(depth_handle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+			
 			const float clear_color[] = { 0.0f, 0.1f, 0.2f, 1.0f };
 			command_list->ClearRenderTargetView(rtv_handle, clear_color, 0, nullptr);
 			command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -718,7 +789,7 @@ int main()
 				command_list->IASetVertexBuffers(0, 1, &mesh.vertex_buffer_view);
 				command_list->IASetIndexBuffer(&mesh.index_buffer_view);
 				UINT num_indices = mesh.index_buffer_view.SizeInBytes / sizeof(UINT32);
-				command_list->DrawIndexedInstanced(num_indices, 1, 0, 0, 0);
+				command_list->DrawIndexedInstanced(num_indices, 100, 0, 0, 0);
 			}
 			
 			// Indicate that the back buffer will now be used to present.
@@ -767,6 +838,8 @@ int main()
 		{
 			constant_buffer_allocations[i]->Release();
 		}
+
+		depth_texture_allocation->Release();
 	}
 
 	gpu_memory_allocator->Release();

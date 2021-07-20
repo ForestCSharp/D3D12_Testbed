@@ -51,15 +51,18 @@ float clamp_n_dot_v(const float n_dot_v) {
 //  l	Incident light unit vector (from surface to light)
 //  v	View unit vector (from surface to eye)
 //  h	Half unit vector between l and v
-float4 brdf_main(const float3 n, const float3 l, const float3 v, const float3 albedo, const float3 f0, const float roughness, const float metallic, const float3 radiance)
+float3 brdf_main(const float3 n, const float3 l, const float3 v, const float3 albedo, const float3 f0, const float roughness, const float metallic, const float3 radiance)
 {
+    //Compute half-vector (between view and incident light)
     const float3 h = normalize(v + l);
 
+    //Dot products
     const float n_dot_v = saturate(dot(n,v));   
     const float n_dot_l = saturate(dot(n,l));
     const float n_dot_h = saturate(dot(n,h));
-
     const float h_dot_v = saturate(dot(h,v));
+
+    // Specular --------------------------------------------------------/
 
     const float  ndf  = distribution_ggx(n_dot_h, roughness);   
     const float  g    = geometry_smith(n_dot_v, n_dot_l, roughness); 
@@ -67,10 +70,15 @@ float4 brdf_main(const float3 n, const float3 l, const float3 v, const float3 al
            
     const float3 numerator  = ndf * g * f; 
     const float denominator = 4 * n_dot_v * n_dot_l;
-    const float3 specular   = numerator / max(denominator, 0.001); // prevent divide by zero for NdotV=0.0 or NdotL=0.0
+
+    // prevent divide by zero for NdotV=0.0 or NdotL=0.0
+    const float3 specular = numerator / max(denominator, 0.001);
 
     // kS is equal to Fresnel
     const float3 ks = f;
+
+    // Diffuse ---------------------------------------------------------/
+    
     // for energy conservation, the diffuse and specular light can't
     // be above 1.0 (unless the surface emits light); to preserve this
     // relationship the diffuse component (kD) should equal 1.0 - kS.
@@ -80,15 +88,9 @@ float4 brdf_main(const float3 n, const float3 l, const float3 v, const float3 al
     // have no diffuse light).
     kd *= 1.0 - metallic;
 
-    float3 out_color = (kd * albedo / PI + specular) * radiance * n_dot_l;
+    const float3 diffuse = kd * albedo / PI;
 
-    //TODO: Pull tonemap and gamma correct out of brdf
-    // HDR tonemapping
-    out_color = out_color / (out_color + float3(1,1,1));
+    const float3 out_color = (diffuse + specular) * radiance * n_dot_l;
     
-    // gamma correct
-    float gamma_factor = 1.0/2.2;
-    out_color = pow(out_color, float3(gamma_factor, gamma_factor, gamma_factor));
-    
-    return float4(out_color, 1.f);
+    return out_color;
 }
