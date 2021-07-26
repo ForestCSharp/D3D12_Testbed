@@ -29,8 +29,9 @@ using std::array;
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-//D3D12 GPU Memory Allocator
+//D3D12 Helpers
 #include "D3D12MemAlloc/D3D12MemAlloc.h"
+#include "d3dx12.h"
 
 #define HR_CHECK(expr)  \
 {\
@@ -59,6 +60,26 @@ ComPtr<ID3DBlob> compile_shader(const LPCWSTR file_name, const LPCSTR entry_poin
 	return out_shader;
 }
 
+void wait_gpu_idle(ComPtr<ID3D12Device> device, ComPtr<ID3D12CommandQueue> command_queue)
+{
+	ComPtr<ID3D12Fence> fence;
+	HR_CHECK(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
+
+	const HANDLE fence_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+	assert(fence_event);
+	
+	HR_CHECK(command_queue->Signal(fence.Get(),1));
+	HR_CHECK(fence->SetEventOnCompletion(1, fence_event));
+	WaitForSingleObject(fence_event, INFINITE);
+}
+
+//TODO: struct to pass around common D3D12 objects
+// device
+// allocator
+// command_queue
+// per-frame command lists?
+// staging command list?
+
 struct SceneConstantBuffer
 {
 	XMMATRIX view;
@@ -69,7 +90,7 @@ struct SceneConstantBuffer
 struct GpuVertex
 {
 	XMFLOAT3 position;
-	XMFLOAT3 normal; //TODO:
+	XMFLOAT3 normal;
 	XMFLOAT4 color;
 	// XMFLOAT2 uv; //TODO:
 };
@@ -99,7 +120,7 @@ struct Mesh
 		resource_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 		resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
 		
-		// FCS TODO: Need to upload with upload heap, then copy over to D3D12_HEAP_TYPE_DEFAULT
+		// FCS TODO: Need to upload with upload heap, then copy over to D3D12_HEAP_TYPE_DEFAULT (Staging Buffer)
 		
 		D3D12MA::ALLOCATION_DESC alloc_desc = {};
 		alloc_desc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
@@ -174,6 +195,123 @@ struct Mesh
 	}
 };
 
+struct Texture
+{
+	ComPtr<ID3D12Resource> texture_resource;
+	D3D12MA::Allocation* texture_allocation = nullptr;
+		
+	//TODO: CTor that just creates and clears
+
+	Texture(const char* file, DXGI_FORMAT format, ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue)
+	{		
+		int image_width, image_height;
+		const int desired_channels = 4; //We want an 'alpha' channel
+		
+		if (float *image_data = stbi_loadf(file, &image_width, &image_height, nullptr, desired_channels))
+		{			
+			const size_t image_pixel_size = desired_channels * sizeof(float);
+			const size_t image_size = image_width * image_height * image_pixel_size;
+			
+			ComPtr<ID3D12Resource> staging_buffer;
+			D3D12MA::Allocation* staging_buffer_allocation = nullptr;
+
+			//Create staging buffer
+			D3D12MA::ALLOCATION_DESC staging_buffer_alloc_desc = {};
+			staging_buffer_alloc_desc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+
+			D3D12_RESOURCE_DESC staging_buffer_desc = {};
+			staging_buffer_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+			staging_buffer_desc.Alignment = 0;
+			staging_buffer_desc.Width =  image_size;
+			staging_buffer_desc.Height = 1;
+			staging_buffer_desc.DepthOrArraySize = 1;
+			staging_buffer_desc.MipLevels = 1;
+			staging_buffer_desc.Format = DXGI_FORMAT_UNKNOWN;
+			staging_buffer_desc.SampleDesc.Count = 1;
+			staging_buffer_desc.SampleDesc.Quality = 0;
+			staging_buffer_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+			staging_buffer_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+			HR_CHECK(gpu_memory_allocator->CreateResource(
+                &staging_buffer_alloc_desc,
+                &staging_buffer_desc,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                nullptr,
+                &staging_buffer_allocation,
+                IID_PPV_ARGS(&staging_buffer)
+            ));
+
+			//Create our texture resource
+			D3D12MA::ALLOCATION_DESC texture_alloc_desc = {};
+			texture_alloc_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+			D3D12_RESOURCE_DESC texture_desc = {};
+			texture_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+			texture_desc.Alignment = 0;
+			texture_desc.Width = image_width;
+			texture_desc.Height = image_height;
+			texture_desc.DepthOrArraySize = 1;
+			texture_desc.MipLevels = 1;
+			texture_desc.Format = format;
+			texture_desc.SampleDesc.Count = 1;
+			texture_desc.SampleDesc.Quality = 0;
+			texture_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+			texture_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+			HR_CHECK(gpu_memory_allocator->CreateResource(
+	            &texture_alloc_desc,
+	            &texture_desc,
+	            D3D12_RESOURCE_STATE_COPY_DEST,
+	            nullptr,
+	            &texture_allocation,
+	            IID_PPV_ARGS(&texture_resource)
+	        ));
+
+			//TODO: Store our "Transfer" command list and reuse
+			ComPtr<ID3D12CommandAllocator> command_allocator;
+			HR_CHECK(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&command_allocator)));
+
+			ComPtr<ID3D12GraphicsCommandList> command_list;
+			HR_CHECK(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocator.Get(), nullptr, IID_PPV_ARGS(&command_list)));
+			command_list->Close();
+			command_list->Reset(command_allocator.Get(), nullptr);
+
+			D3D12_SUBRESOURCE_DATA subresource_data = {};
+			subresource_data.pData = image_data;
+			subresource_data.RowPitch = image_width * image_pixel_size;
+			subresource_data.SlicePitch = subresource_data.RowPitch * image_height;
+			
+			UpdateSubresources(command_list.Get(), texture_resource.Get(), staging_buffer.Get(), 0, 0, 1, &subresource_data);
+			auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(texture_resource.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            command_list->ResourceBarrier(1, &barrier);
+
+			command_list->Close();
+
+			ID3D12CommandList* p_cmd_list = command_list.Get();
+			command_queue->ExecuteCommandLists(1, &p_cmd_list);
+			
+			wait_gpu_idle(device, command_queue);
+			
+			staging_buffer_allocation->Release();
+			
+			stbi_image_free(image_data);
+		}
+		else
+		{
+			std::cout << "Failed to load texture: " << file << std::endl;
+		}
+	}
+
+	void release()
+	{
+		if (texture_allocation)
+		{
+			texture_allocation->Release();
+			texture_allocation = nullptr;
+		}
+	}
+};
+
 static const UINT backbuffer_count = 3;
 
 /*  Almost identical to CD3DX12_RESOURCE_BARRIER::Transition in d3dx12.h
@@ -193,19 +331,6 @@ static D3D12_RESOURCE_BARRIER transition_resource(
 	result.Transition.StateAfter = state_after;
 	result.Transition.Subresource = subresource;
 	return result;
-}
-
-void wait_gpu_idle(ComPtr<ID3D12Device> device, ComPtr<ID3D12CommandQueue> command_queue)
-{
-	ComPtr<ID3D12Fence> fence;
-	HR_CHECK(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
-
-	const HANDLE fence_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-	assert(fence_event);
-	
-	HR_CHECK(command_queue->Signal(fence.Get(),1));
-	HR_CHECK(fence->SetEventOnCompletion(1, fence_event));
-	WaitForSingleObject(fence_event, INFINITE);
 }
 
 bool is_key_down(const int in_key)
@@ -256,9 +381,15 @@ int main()
 	ShowWindow(window, SW_SHOW);
 
 	ComPtr<ID3D12Debug> debug_controller;
+	ComPtr<ID3D12Debug1> debug_controller_1;
 	if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug_controller))))
 	{
 		debug_controller->EnableDebugLayer();
+		
+		if (SUCCEEDED(debug_controller->QueryInterface(IID_PPV_ARGS(&debug_controller_1))))
+		{
+			debug_controller_1->SetEnableGPUBasedValidation(true);
+		}
 	}
 
 	// 2. Create a D3D12 Factory, Adapter, and Device
@@ -292,7 +423,7 @@ int main()
 
 	D3D12MA::Allocator* gpu_memory_allocator = nullptr;
 	HR_CHECK(D3D12MA::CreateAllocator(&allocator_desc, &gpu_memory_allocator));
-
+	
 	HANDLE fence_event;
 	ComPtr<ID3D12Fence> fence;
 
@@ -529,6 +660,11 @@ int main()
 	//FCS TODO: one command_list per frame_index, build command_list per-frame
 	ComPtr<ID3D12GraphicsCommandList> command_list;
 	HR_CHECK(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocators[frame_index].Get(), pipeline_state.Get(), IID_PPV_ARGS(&command_list)));
+	HR_CHECK(command_list->Close());
+
+	//Load Environment Map TODO: Eventually manage own cmd list? or have a pre-built cmd list for this purpose
+	HR_CHECK(command_list->Reset(command_allocators[frame_index].Get(), pipeline_state.Get()));
+	Texture hdr_texture("data/hdr/Road_to_MonumentValley_Ref.hdr", DXGI_FORMAT_R32G32B32A32_FLOAT, device, gpu_memory_allocator, command_queue);
 	HR_CHECK(command_list->Close());
 
 	GltfAsset gltf_asset;
@@ -799,8 +935,8 @@ int main()
 			HR_CHECK(command_list->Close());
 
 			// Execute the command list.
-			ID3D12CommandList* ppCommandLists[] = { command_list.Get() };
-			command_queue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
+			ID3D12CommandList* pp_command_lists[] = { command_list.Get() };
+			command_queue->ExecuteCommandLists(_countof(pp_command_lists), pp_command_lists);
 
 			// Present the frame.
 			const bool vsync_enabled = true;
@@ -829,6 +965,8 @@ int main()
 
 	
 	{ //Free all memory allocated with D3D12 Memory Allocator
+		hdr_texture.release();
+		
 		for (Mesh& mesh : meshes)
 		{
 			mesh.release();

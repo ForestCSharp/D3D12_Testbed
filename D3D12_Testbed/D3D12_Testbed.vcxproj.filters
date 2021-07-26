@@ -42,10 +42,17 @@
     <ClInclude Include="D3D12MemAlloc\D3D12MemAlloc.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="gltf.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="stb_image.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="d3dx12.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="brdf.hlsli">
-      <Filter>Assets\Shaders</Filter>
-    </None>
+    <None Include="brdf_main.hlsli" />
   </ItemGroup>
 </Project>
