@@ -588,8 +588,8 @@ int main()
 	}
 
 	// 9. Compile our vertex and pixel shaders
-	ComPtr<ID3DBlob> vertex_shader = compile_shader(L"shaders.hlsl", "vs_main", "vs_5_0");
-	ComPtr<ID3DBlob> pixel_shader  = compile_shader(L"shaders.hlsl", "ps_main", "ps_5_0");
+	ComPtr<ID3DBlob> vertex_shader = compile_shader(L"data/shaders/shaders.hlsl", "vs_main", "vs_5_0");
+	ComPtr<ID3DBlob> pixel_shader  = compile_shader(L"data/shaders/shaders.hlsl", "ps_main", "ps_5_0");
 
 	assert(vertex_shader && pixel_shader);
 

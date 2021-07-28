@@ -21,10 +21,10 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="main.cpp">
+    <ClCompile Include="src\main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D3D12MemAlloc\D3D12MemAlloc.cpp">
+    <ClCompile Include="src\D3D12MemAlloc\D3D12MemAlloc.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -34,25 +34,25 @@
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="shaders.hlsl">
+    <CustomBuild Include="data\shaders\shaders.hlsl">
       <Filter>Assets\Shaders</Filter>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="D3D12MemAlloc\D3D12MemAlloc.h">
+    <ClInclude Include="src\D3D12MemAlloc\D3D12MemAlloc.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="gltf.h">
+    <ClInclude Include="src\gltf.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="stb_image.h">
+    <ClInclude Include="src\stb_image.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="d3dx12.h">
+    <ClInclude Include="src\d3dx12.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="brdf_main.hlsli" />
+    <None Include="data\shaders\brdf_main.hlsli" />
   </ItemGroup>
 </Project>
