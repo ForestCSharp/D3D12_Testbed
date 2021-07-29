@@ -1,5 +1,5 @@
 #ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN             // Exclude rarely-used stuff from Windows headers.
+#define WIN32_LEAN_AND_MEAN
 #endif
 
 //Windows Libs
@@ -199,6 +199,8 @@ struct Texture
 {
 	ComPtr<ID3D12Resource> texture_resource;
 	D3D12MA::Allocation* texture_allocation = nullptr;
+
+	ComPtr<ID3D12DescriptorHeap> texture_descriptor_heap;
 		
 	//TODO: CTor that just creates and clears
 
@@ -206,40 +208,12 @@ struct Texture
 	{		
 		int image_width, image_height;
 		const int desired_channels = 4; //We want an 'alpha' channel
-		
+
+		stbi_set_flip_vertically_on_load(true);
 		if (float *image_data = stbi_loadf(file, &image_width, &image_height, nullptr, desired_channels))
-		{			
+		{
 			const size_t image_pixel_size = desired_channels * sizeof(float);
 			const size_t image_size = image_width * image_height * image_pixel_size;
-			
-			ComPtr<ID3D12Resource> staging_buffer;
-			D3D12MA::Allocation* staging_buffer_allocation = nullptr;
-
-			//Create staging buffer
-			D3D12MA::ALLOCATION_DESC staging_buffer_alloc_desc = {};
-			staging_buffer_alloc_desc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
-
-			D3D12_RESOURCE_DESC staging_buffer_desc = {};
-			staging_buffer_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-			staging_buffer_desc.Alignment = 0;
-			staging_buffer_desc.Width =  image_size;
-			staging_buffer_desc.Height = 1;
-			staging_buffer_desc.DepthOrArraySize = 1;
-			staging_buffer_desc.MipLevels = 1;
-			staging_buffer_desc.Format = DXGI_FORMAT_UNKNOWN;
-			staging_buffer_desc.SampleDesc.Count = 1;
-			staging_buffer_desc.SampleDesc.Quality = 0;
-			staging_buffer_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-			staging_buffer_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-
-			HR_CHECK(gpu_memory_allocator->CreateResource(
-                &staging_buffer_alloc_desc,
-                &staging_buffer_desc,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-                nullptr,
-                &staging_buffer_allocation,
-                IID_PPV_ARGS(&staging_buffer)
-            ));
 
 			//Create our texture resource
 			D3D12MA::ALLOCATION_DESC texture_alloc_desc = {};
@@ -267,6 +241,35 @@ struct Texture
 	            IID_PPV_ARGS(&texture_resource)
 	        ));
 
+			ComPtr<ID3D12Resource> staging_buffer;
+			D3D12MA::Allocation* staging_buffer_allocation = nullptr;
+
+			//Create staging buffer
+			D3D12MA::ALLOCATION_DESC staging_buffer_alloc_desc = {};
+			staging_buffer_alloc_desc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+
+            D3D12_RESOURCE_DESC staging_buffer_desc = {};
+			staging_buffer_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+			staging_buffer_desc.Alignment = 0;
+			staging_buffer_desc.Width =  GetRequiredIntermediateSize(texture_resource.Get(),0,1); //Important
+			staging_buffer_desc.Height = 1;
+			staging_buffer_desc.DepthOrArraySize = 1;
+			staging_buffer_desc.MipLevels = 1;
+			staging_buffer_desc.Format = DXGI_FORMAT_UNKNOWN;
+			staging_buffer_desc.SampleDesc.Count = 1;
+			staging_buffer_desc.SampleDesc.Quality = 0;
+			staging_buffer_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+			staging_buffer_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+			HR_CHECK(gpu_memory_allocator->CreateResource(
+                &staging_buffer_alloc_desc,
+                &staging_buffer_desc,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                nullptr,
+                &staging_buffer_allocation,
+                IID_PPV_ARGS(&staging_buffer)
+            ));
+
 			//TODO: Store our "Transfer" command list and reuse
 			ComPtr<ID3D12CommandAllocator> command_allocator;
 			HR_CHECK(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&command_allocator)));
@@ -282,7 +285,7 @@ struct Texture
 			subresource_data.SlicePitch = subresource_data.RowPitch * image_height;
 			
 			UpdateSubresources(command_list.Get(), texture_resource.Get(), staging_buffer.Get(), 0, 0, 1, &subresource_data);
-			auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(texture_resource.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+			auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(texture_resource.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             command_list->ResourceBarrier(1, &barrier);
 
 			command_list->Close();
@@ -295,6 +298,26 @@ struct Texture
 			staging_buffer_allocation->Release();
 			
 			stbi_image_free(image_data);
+
+			//create texture descriptor heap
+			D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc = {};
+			descriptor_heap_desc.NumDescriptors = 1;
+			// This heap contains SRV, UAV or CBVs -- in our case one SRV
+			descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+			descriptor_heap_desc.NodeMask = 0;
+			descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+
+			HR_CHECK(device->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&texture_descriptor_heap)));
+
+			D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+			srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+			srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+			srv_desc.Format = format;
+			srv_desc.Texture2D.MipLevels = 1;
+			srv_desc.Texture2D.MostDetailedMip = 0;
+			srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+			device->CreateShaderResourceView(texture_resource.Get(), &srv_desc, texture_descriptor_heap->GetCPUDescriptorHandleForHeapStart());
 		}
 		else
 		{
@@ -393,7 +416,7 @@ int main()
 	}
 
 	// 2. Create a D3D12 Factory, Adapter, and Device
-	UINT dxgi_factory_flags = DXGI_CREATE_FACTORY_DEBUG;
+	UINT dxgi_factory_flags	 = DXGI_CREATE_FACTORY_DEBUG;
 	ComPtr<IDXGIFactory4> factory;
 	HR_CHECK(CreateDXGIFactory2(dxgi_factory_flags, IID_PPV_ARGS(&factory)));
 
@@ -474,15 +497,15 @@ int main()
 
 	UINT rtv_heap_offset = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 	
-	array<ComPtr<ID3D12DescriptorHeap>, backbuffer_count> cbv_descriptor_heaps;
-	for (uint32_t i = 0; i < backbuffer_count; ++i)
-	{
-		D3D12_DESCRIPTOR_HEAP_DESC desc_heap_desc = {};
-		desc_heap_desc.NumDescriptors = 1;
-		desc_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-		desc_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-		HR_CHECK(device->CreateDescriptorHeap(&desc_heap_desc, IID_PPV_ARGS(&cbv_descriptor_heaps[i])));
-	}
+	// array<ComPtr<ID3D12DescriptorHeap>, backbuffer_count> cbv_descriptor_heaps;
+	// for (uint32_t i = 0; i < backbuffer_count; ++i)
+	// {
+	// 	D3D12_DESCRIPTOR_HEAP_DESC desc_heap_desc = {};
+	// 	desc_heap_desc.NumDescriptors = 1;
+	// 	desc_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+	// 	desc_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+	// 	HR_CHECK(device->CreateDescriptorHeap(&desc_heap_desc, IID_PPV_ARGS(&cbv_descriptor_heaps[i])));
+	// }
 
 	// Create Depth Buffer
 	D3D12_DESCRIPTOR_HEAP_DESC depth_heap_desc = {};
@@ -558,30 +581,26 @@ int main()
 	// 8. Create our (empty) root signature, which describes resources to be used when running work on the GPU
 	ComPtr<ID3D12RootSignature> root_signature;
 	{
-		D3D12_DESCRIPTOR_RANGE1 range = {};
-		range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
-		range.NumDescriptors = 1;
-		range.BaseShaderRegister = 0;
-		range.RegisterSpace = 0;
-		range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC;
-		range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+		std::array<CD3DX12_ROOT_PARAMETER1,2> root_parameters;
 
-		D3D12_ROOT_PARAMETER1 root_parameter = {};
-		root_parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-		root_parameter.DescriptorTable.NumDescriptorRanges = 1;
-		root_parameter.DescriptorTable.pDescriptorRanges = &range;
-		root_parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		//TODO: Could store multiple in one table (via CD3DX12_ROOT_PARAMETER1::InitAsDescriptorTable)
 
-		D3D12_VERSIONED_ROOT_SIGNATURE_DESC root_signature_desc = {};
-		root_signature_desc.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
-		root_signature_desc.Desc_1_1 = {
-			1,
-			&root_parameter,
-			0,
-			nullptr,
-			D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
-		};
+		// Constant Buffer View
+		root_parameters[0].InitAsConstantBufferView(0,0,D3D12_ROOT_DESCRIPTOR_FLAG_NONE,D3D12_SHADER_VISIBILITY_ALL);
 
+		// hdr texture SRV
+		// TODO: FIXME: Make table
+		// root_parameters[1].InitAsShaderResourceView(0, 0);
+
+		CD3DX12_DESCRIPTOR_RANGE1 range{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0 };
+		root_parameters[1].InitAsDescriptorTable (1, &range);
+		
+		std::array<CD3DX12_STATIC_SAMPLER_DESC,1> samplers;
+		samplers[0].Init(0, D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT);
+		
+		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_signature_desc;
+		root_signature_desc.Init_1_1(root_parameters.size(), root_parameters.data(), samplers.size(), samplers.data(), D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+		
 		ComPtr<ID3DBlob> signature_blob, error_blob;
 		HR_CHECK(D3D12SerializeVersionedRootSignature(&root_signature_desc, &signature_blob, &error_blob));
 		HR_CHECK(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(&root_signature)));
@@ -657,14 +676,15 @@ int main()
 	HR_CHECK(device->CreateGraphicsPipelineState(&pso_desc, IID_PPV_ARGS(&pipeline_state)));
 
 	// 12. Create Command list using command allocator and pipeline state, and close it (we'll record it later)
-	//FCS TODO: one command_list per frame_index, build command_list per-frame
+	//FCS TODO: one command_list per frame_index, build command_list per-frame (may not need this, one command allocator per frame should be sufficient, as you can reset command lists after they've been submitted)
 	ComPtr<ID3D12GraphicsCommandList> command_list;
 	HR_CHECK(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocators[frame_index].Get(), pipeline_state.Get(), IID_PPV_ARGS(&command_list)));
 	HR_CHECK(command_list->Close());
 
 	//Load Environment Map TODO: Eventually manage own cmd list? or have a pre-built cmd list for this purpose
 	HR_CHECK(command_list->Reset(command_allocators[frame_index].Get(), pipeline_state.Get()));
-	Texture hdr_texture("data/hdr/Road_to_MonumentValley_Ref.hdr", DXGI_FORMAT_R32G32B32A32_FLOAT, device, gpu_memory_allocator, command_queue);
+	//TODO: FIXME: _Env images are loaded all black
+	Texture hdr_texture("data/hdr/Frozen_Waterfall_Env.hdr", DXGI_FORMAT_R32G32B32A32_FLOAT, device, gpu_memory_allocator, command_queue);
 	HR_CHECK(command_list->Close());
 
 	GltfAsset gltf_asset;
@@ -772,10 +792,10 @@ int main()
 		));
 
 		// Describe and create a constant buffer view.
-		D3D12_CONSTANT_BUFFER_VIEW_DESC cbv_desc = {};
-		cbv_desc.BufferLocation = constant_buffer->GetGPUVirtualAddress();
-		cbv_desc.SizeInBytes = static_cast<UINT>(resource_desc.Width);
-		device->CreateConstantBufferView(&cbv_desc, cbv_descriptor_heaps[i]->GetCPUDescriptorHandleForHeapStart());
+		// D3D12_CONSTANT_BUFFER_VIEW_DESC cbv_desc = {};
+		// cbv_desc.BufferLocation = constant_buffer->GetGPUVirtualAddress();
+		// cbv_desc.SizeInBytes = static_cast<UINT>(resource_desc.Width);
+		// device->CreateConstantBufferView(&cbv_desc, cbv_descriptor_heaps[i]->GetCPUDescriptorHandleForHeapStart());
 
 		// Map and initialize the constant buffer. We don't unmap this until the
 		// app closes. Keeping things mapped for the lifetime of the resource is okay.
@@ -887,10 +907,14 @@ int main()
 			// Set necessary state.
 			command_list->SetGraphicsRootSignature(root_signature.Get());
 
-			ID3D12DescriptorHeap* ppHeaps[] = { cbv_descriptor_heaps[frame_index].Get() };
+			//FCS NOTE: Only one heap of a given type can be set at a time, so we'll eventually want one big heap
+			ID3D12DescriptorHeap* ppHeaps[] = { hdr_texture.texture_descriptor_heap.Get() };
 			command_list->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
 
-			command_list->SetGraphicsRootDescriptorTable(0, cbv_descriptor_heaps[frame_index]->GetGPUDescriptorHandleForHeapStart());
+			//Slot 0: constant buffer view
+			command_list->SetGraphicsRootConstantBufferView(0, constant_buffers[frame_index]->GetGPUVirtualAddress());
+			//Slot 1: hdr texture
+			command_list->SetGraphicsRootDescriptorTable(1, hdr_texture.texture_descriptor_heap->GetGPUDescriptorHandleForHeapStart());
 
 			D3D12_VIEWPORT viewport = {};
 			viewport.TopLeftX = 0.0f;
