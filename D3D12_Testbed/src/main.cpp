@@ -200,13 +200,16 @@ struct TextureResource
 	ComPtr<ID3D12Resource> texture_resource;
 	D3D12MA::Allocation* texture_allocation = nullptr;
 
-	ComPtr<ID3D12DescriptorHeap> texture_descriptor_heap;
+	//TODO: Stored here for convenience (for now)
+	ComPtr<ID3D12DescriptorHeap> texture_descriptor_heap_srv;
+	ComPtr<ID3D12DescriptorHeap> texture_descriptor_heap_rtv;
 	
-	TextureResource(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format, const UINT image_width, const UINT image_height, const UINT image_count)
+	TextureResource(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags, const UINT image_width, const UINT image_height, const UINT image_count)
 	{
-		create_texture(device, gpu_memory_allocator, format, image_width, image_height, image_count);
+		create_texture(device, gpu_memory_allocator, format, flags, image_width, image_height, image_count);
 	}
 
+	//Loads a single texture from file
 	TextureResource(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue, const DXGI_FORMAT format, const char* file)
 	{
 		int image_width, image_height;
@@ -215,7 +218,7 @@ struct TextureResource
 		stbi_set_flip_vertically_on_load(true);
 		if (float *image_data = stbi_loadf(file, &image_width, &image_height, nullptr, desired_channels))
 		{
-			create_texture(device, gpu_memory_allocator, format, image_width, image_height, 1);
+			create_texture(device, gpu_memory_allocator, format, D3D12_RESOURCE_FLAG_NONE, image_width, image_height, 1);
 			
 			const size_t image_pixel_size = desired_channels * sizeof(float);
 
@@ -283,7 +286,7 @@ struct TextureResource
 		}
 	}
 
-	void create_texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format, const UINT image_width, const UINT image_height, const UINT image_count)
+	void create_texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags, const UINT image_width, const UINT image_height, const UINT image_count)
 	{
 		assert(gpu_memory_allocator);
 		assert(image_count > 0);
@@ -302,7 +305,7 @@ struct TextureResource
 		texture_desc.SampleDesc.Count = 1;
 		texture_desc.SampleDesc.Quality = 0;
 		texture_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-		texture_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+		texture_desc.Flags = flags;
 
 		HR_CHECK(gpu_memory_allocator->CreateResource(
             &texture_alloc_desc,
@@ -313,13 +316,19 @@ struct TextureResource
             IID_PPV_ARGS(&texture_resource)
         ));
 
-		create_descriptor_heap(device, format);
+		create_srv_descriptor_heap(device);
+
+		//Create rtv if we can be a render target
+		if (flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+		{
+			create_rtv_descriptor_heap(device);
+		}
 	}
 
 	//TODO: Should likely be separated from TextureResource struct
 	//Creates a basic SRV for this texture resource
 	//TODO: RTV
-	void create_descriptor_heap(const ComPtr<ID3D12Device> device, DXGI_FORMAT format)
+	void create_srv_descriptor_heap(const ComPtr<ID3D12Device> device)
 	{
 		//create texture descriptor heap
 		D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc = {};
@@ -329,7 +338,7 @@ struct TextureResource
 		descriptor_heap_desc.NodeMask = 0;
 		descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
-		HR_CHECK(device->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&texture_descriptor_heap)));
+		HR_CHECK(device->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&texture_descriptor_heap_srv)));
 
 		const UINT16 texture_array_size = texture_resource->GetDesc().DepthOrArraySize;
 		const bool is_texture_array = texture_array_size > 1;
@@ -337,7 +346,7 @@ struct TextureResource
 		D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
 
 		//Shared State
-		srv_desc.Format = format;
+		srv_desc.Format = texture_resource->GetDesc().Format;
 		srv_desc.ViewDimension = is_texture_array ? D3D12_SRV_DIMENSION_TEXTURE2DARRAY : D3D12_SRV_DIMENSION_TEXTURE2D;
 		srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 		
@@ -358,7 +367,47 @@ struct TextureResource
 			srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
 		}
 
-		device->CreateShaderResourceView(texture_resource.Get(), &srv_desc, texture_descriptor_heap->GetCPUDescriptorHandleForHeapStart());
+		device->CreateShaderResourceView(texture_resource.Get(), &srv_desc, texture_descriptor_heap_srv->GetCPUDescriptorHandleForHeapStart());
+	}
+
+	void create_rtv_descriptor_heap(const ComPtr<ID3D12Device> device)
+	{
+		D3D12_RESOURCE_DESC resource_desc = texture_resource->GetDesc();
+		assert(resource_desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET == D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+		
+		//create texture descriptor heap
+		D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc = {};
+		descriptor_heap_desc.NumDescriptors = 1;
+		// This heap contains SRV, UAV or CBVs -- in our case one SRV
+		descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+		descriptor_heap_desc.NodeMask = 0;
+		descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+
+		HR_CHECK(device->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&texture_descriptor_heap_rtv)));
+
+		const UINT16 texture_array_size = resource_desc.DepthOrArraySize;
+		const bool is_texture_array = texture_array_size > 1;
+
+		D3D12_RENDER_TARGET_VIEW_DESC rtv_desc = {};
+
+		//Shared State
+		rtv_desc.Format = resource_desc.Format;
+		rtv_desc.ViewDimension = is_texture_array ? D3D12_RTV_DIMENSION_TEXTURE2DARRAY : D3D12_RTV_DIMENSION_TEXTURE2D;
+		
+		if (is_texture_array)
+		{
+			rtv_desc.Texture2DArray.MipSlice = 0;
+			rtv_desc.Texture2DArray.FirstArraySlice = 0;
+			rtv_desc.Texture2DArray.ArraySize = texture_array_size;
+			rtv_desc.Texture2DArray.PlaneSlice = 0;
+		}
+		else
+		{
+			rtv_desc.Texture2D.MipSlice = 0;
+			rtv_desc.Texture2D.PlaneSlice = 0;
+		}
+
+		device->CreateRenderTargetView(texture_resource.Get(), &rtv_desc, texture_descriptor_heap_rtv->GetCPUDescriptorHandleForHeapStart());
 	}
 
 	void set_name(const LPCWSTR in_name) const
@@ -383,6 +432,7 @@ struct TextureResource
 	.height(4)
 	.format(...)
 	.array_count(6)
+	.allow_render_target(true)
 	.build();
 */
 
@@ -734,11 +784,11 @@ int main()
 	hdr_texture.set_name(TEXT("HDR Texture"));
 	HR_CHECK(command_list->Close());
 
-
-	//TODO: render equirectangular to this cubemap
 	const UINT cube_size = 512;
-	TextureResource cubemap_texture_array(device, gpu_memory_allocator, DXGI_FORMAT_R32G32B32A32_FLOAT, cube_size, cube_size, 6);
+	TextureResource cubemap_texture_array(device, gpu_memory_allocator, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, cube_size, cube_size, 6);
 	cubemap_texture_array.set_name(TEXT("Cubemap Texture"));
+
+	//TODO: render equirectangular to above cubemap
 
 	GltfAsset gltf_asset;
 	if (!gltf_load_asset("data/meshes/sphere.glb", &gltf_asset))
@@ -963,13 +1013,13 @@ int main()
 			command_list->SetGraphicsRootSignature(root_signature.Get());
 
 			//FCS NOTE: Only one heap of a given type can be set at a time, so we'll eventually want one big heap
-			ID3D12DescriptorHeap* ppHeaps[] = { hdr_texture.texture_descriptor_heap.Get() };
+			ID3D12DescriptorHeap* ppHeaps[] = { hdr_texture.texture_descriptor_heap_srv.Get() };
 			command_list->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
 
 			//Slot 0: constant buffer view
 			command_list->SetGraphicsRootConstantBufferView(0, constant_buffers[frame_index]->GetGPUVirtualAddress());
 			//Slot 1: hdr texture
-			command_list->SetGraphicsRootDescriptorTable(1, hdr_texture.texture_descriptor_heap->GetGPUDescriptorHandleForHeapStart());
+			command_list->SetGraphicsRootDescriptorTable(1, hdr_texture.texture_descriptor_heap_srv->GetGPUDescriptorHandleForHeapStart());
 
 			D3D12_VIEWPORT viewport = {};
 			viewport.TopLeftX = 0.0f;
