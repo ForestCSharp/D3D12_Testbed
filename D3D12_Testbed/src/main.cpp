@@ -213,7 +213,6 @@ struct Texture
 		if (float *image_data = stbi_loadf(file, &image_width, &image_height, nullptr, desired_channels))
 		{
 			const size_t image_pixel_size = desired_channels * sizeof(float);
-			const size_t image_size = image_width * image_height * image_pixel_size;
 
 			//Create our texture resource
 			D3D12MA::ALLOCATION_DESC texture_alloc_desc = {};
@@ -697,12 +696,12 @@ int main()
 
 	std::vector<Mesh> meshes;
 	GltfMesh* gltf_mesh = &gltf_asset.meshes[0];
-	for (uint32_t i = 0; i < gltf_mesh->num_primitives; ++i)
+	for (uint32_t prim_idx = 0; prim_idx < gltf_mesh->num_primitives; ++prim_idx)
 	{
 		std::vector<GpuVertex> vertices;
 		std::vector<UINT32> indices;
 		
-		GltfPrimitive* primitive = &gltf_mesh->primitives[i];
+		GltfPrimitive* primitive = &gltf_mesh->primitives[prim_idx];
 	
 		//Vertices
 		uint8_t* positions_buffer = primitive->positions->buffer_view->buffer->data;
@@ -720,11 +719,12 @@ int main()
 		uint32_t vertices_count = primitive->positions->count;
 		vertices.reserve(vertices_count);
 	
-		for (uint32_t _i = 0; _i < vertices_count; ++_i) {
+		for (uint32_t vert_idx = 0; vert_idx < vertices_count; ++vert_idx) 
+		{
 			GpuVertex vertex;
 			memcpy(&vertex.position, positions_buffer, positions_byte_stride);
 			memcpy(&vertex.normal, normals_buffer, normals_byte_stride);
-			vertex.color = XMFLOAT4(1.f, 1.f, 1.f, 1.0f);
+			vertex.color = XMFLOAT4(0.2f, 0.2f, 0.2f, 1.0f);
 			// memcpy(&vertex.uv, uvs_buffer, uvs_byte_stride); //TODO:
 		
 			positions_buffer += positions_byte_stride;
@@ -742,7 +742,8 @@ int main()
 		uint32_t indices_count = primitive->indices->count;
 		indices.reserve(indices_count);
 	
-		for (uint32_t _i = 0; _i < indices_count; ++_i) {
+		for (uint32_t indices_idx = 0; indices_idx < indices_count; ++indices_idx) 
+		{
 			UINT32 index = 0; //Need to init for memcpy
 			memcpy(&index, indices_buffer, indices_byte_stride);
 			indices_buffer += indices_byte_stride;

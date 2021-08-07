@@ -122,7 +122,7 @@ float4 ps_main(const PsInput input) : SV_TARGET
     for (int i = 0; i < NUM_LIGHTS; ++i)
     {
         lights[i].color = float3(1,1,1);
-        lights[i].intensity = 2.0f;
+        lights[i].intensity = 5.0f;
         
         const float3 to_light = lights[i].pos - input.world_pos;
         const float distance_to_light_squared = pow(length(to_light),2);
