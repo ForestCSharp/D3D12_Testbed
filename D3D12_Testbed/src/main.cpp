@@ -195,50 +195,29 @@ struct Mesh
 	}
 };
 
-struct Texture
+struct TextureResource
 {
 	ComPtr<ID3D12Resource> texture_resource;
 	D3D12MA::Allocation* texture_allocation = nullptr;
 
 	ComPtr<ID3D12DescriptorHeap> texture_descriptor_heap;
-		
-	//TODO: CTor that just creates and clears
+	
+	TextureResource(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format, const UINT image_width, const UINT image_height, const UINT image_count)
+	{
+		create_texture(device, gpu_memory_allocator, format, image_width, image_height, image_count);
+	}
 
-	Texture(const char* file, DXGI_FORMAT format, ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue)
-	{		
+	TextureResource(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue, const DXGI_FORMAT format, const char* file)
+	{
 		int image_width, image_height;
-		const int desired_channels = 4; //We want an 'alpha' channel
+		const int desired_channels = 4; //We want an alpha channel
 
 		stbi_set_flip_vertically_on_load(true);
 		if (float *image_data = stbi_loadf(file, &image_width, &image_height, nullptr, desired_channels))
 		{
+			create_texture(device, gpu_memory_allocator, format, image_width, image_height, 1);
+			
 			const size_t image_pixel_size = desired_channels * sizeof(float);
-
-			//Create our texture resource
-			D3D12MA::ALLOCATION_DESC texture_alloc_desc = {};
-			texture_alloc_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
-
-			D3D12_RESOURCE_DESC texture_desc = {};
-			texture_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-			texture_desc.Alignment = 0;
-			texture_desc.Width = image_width;
-			texture_desc.Height = image_height;
-			texture_desc.DepthOrArraySize = 1;
-			texture_desc.MipLevels = 1;
-			texture_desc.Format = format;
-			texture_desc.SampleDesc.Count = 1;
-			texture_desc.SampleDesc.Quality = 0;
-			texture_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-			texture_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-
-			HR_CHECK(gpu_memory_allocator->CreateResource(
-	            &texture_alloc_desc,
-	            &texture_desc,
-	            D3D12_RESOURCE_STATE_COPY_DEST,
-	            nullptr,
-	            &texture_allocation,
-	            IID_PPV_ARGS(&texture_resource)
-	        ));
 
 			ComPtr<ID3D12Resource> staging_buffer;
 			D3D12MA::Allocation* staging_buffer_allocation = nullptr;
@@ -297,26 +276,6 @@ struct Texture
 			staging_buffer_allocation->Release();
 			
 			stbi_image_free(image_data);
-
-			//create texture descriptor heap
-			D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc = {};
-			descriptor_heap_desc.NumDescriptors = 1;
-			// This heap contains SRV, UAV or CBVs -- in our case one SRV
-			descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-			descriptor_heap_desc.NodeMask = 0;
-			descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-
-			HR_CHECK(device->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&texture_descriptor_heap)));
-
-			D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-			srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-			srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-			srv_desc.Format = format;
-			srv_desc.Texture2D.MipLevels = 1;
-			srv_desc.Texture2D.MostDetailedMip = 0;
-			srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
-
-			device->CreateShaderResourceView(texture_resource.Get(), &srv_desc, texture_descriptor_heap->GetCPUDescriptorHandleForHeapStart());
 		}
 		else
 		{
@@ -324,6 +283,90 @@ struct Texture
 		}
 	}
 
+	void create_texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format, const UINT image_width, const UINT image_height, const UINT image_count)
+	{
+		assert(gpu_memory_allocator);
+		assert(image_count > 0);
+		
+		D3D12MA::ALLOCATION_DESC texture_alloc_desc = {};
+		texture_alloc_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+		D3D12_RESOURCE_DESC texture_desc = {};
+		texture_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+		texture_desc.Alignment = 0;
+		texture_desc.Width = image_width;
+		texture_desc.Height = image_height;
+		texture_desc.DepthOrArraySize = image_count;
+		texture_desc.MipLevels = 1;
+		texture_desc.Format = format;
+		texture_desc.SampleDesc.Count = 1;
+		texture_desc.SampleDesc.Quality = 0;
+		texture_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+		texture_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+		HR_CHECK(gpu_memory_allocator->CreateResource(
+            &texture_alloc_desc,
+            &texture_desc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr,
+            &texture_allocation,
+            IID_PPV_ARGS(&texture_resource)
+        ));
+
+		create_descriptor_heap(device, format);
+	}
+
+	//TODO: Should likely be separated from TextureResource struct
+	//Creates a basic SRV for this texture resource
+	//TODO: RTV
+	void create_descriptor_heap(const ComPtr<ID3D12Device> device, DXGI_FORMAT format)
+	{
+		//create texture descriptor heap
+		D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc = {};
+		descriptor_heap_desc.NumDescriptors = 1;
+		// This heap contains SRV, UAV or CBVs -- in our case one SRV
+		descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+		descriptor_heap_desc.NodeMask = 0;
+		descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+
+		HR_CHECK(device->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&texture_descriptor_heap)));
+
+		const UINT16 texture_array_size = texture_resource->GetDesc().DepthOrArraySize;
+		const bool is_texture_array = texture_array_size > 1;
+
+		D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+
+		//Shared State
+		srv_desc.Format = format;
+		srv_desc.ViewDimension = is_texture_array ? D3D12_SRV_DIMENSION_TEXTURE2DARRAY : D3D12_SRV_DIMENSION_TEXTURE2D;
+		srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		
+		if (is_texture_array)
+		{	
+			srv_desc.Texture2DArray.MostDetailedMip = 0;
+			srv_desc.Texture2DArray.MipLevels = 1;
+			srv_desc.Texture2DArray.FirstArraySlice = 0;
+			srv_desc.Texture2DArray.ArraySize = texture_array_size;
+			srv_desc.Texture2DArray.PlaneSlice = 0;
+			srv_desc.Texture2DArray.ResourceMinLODClamp = 0.0f;
+		}
+		else
+		{
+			srv_desc.Texture2D.MostDetailedMip = 0;
+			srv_desc.Texture2D.MipLevels = 1;
+			srv_desc.Texture2D.PlaneSlice = 0;
+			srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
+		}
+
+		device->CreateShaderResourceView(texture_resource.Get(), &srv_desc, texture_descriptor_heap->GetCPUDescriptorHandleForHeapStart());
+	}
+
+	void set_name(const LPCWSTR in_name) const
+	{
+		assert(texture_resource);
+		texture_resource->SetName(in_name);
+	}
+	
 	void release()
 	{
 		if (texture_allocation)
@@ -333,6 +376,15 @@ struct Texture
 		}
 	}
 };
+
+//TODO: TextureBuilder:
+/* texture_builder
+	.width(4)
+	.height(4)
+	.format(...)
+	.array_count(6)
+	.build();
+*/
 
 static const UINT backbuffer_count = 3;
 
@@ -587,10 +639,6 @@ int main()
 		// Constant Buffer View
 		root_parameters[0].InitAsConstantBufferView(0,0,D3D12_ROOT_DESCRIPTOR_FLAG_NONE,D3D12_SHADER_VISIBILITY_ALL);
 
-		// hdr texture SRV
-		// TODO: FIXME: Make table
-		// root_parameters[1].InitAsShaderResourceView(0, 0);
-
 		CD3DX12_DESCRIPTOR_RANGE1 range{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0 };
 		root_parameters[1].InitAsDescriptorTable (1, &range);
 		
@@ -682,9 +730,15 @@ int main()
 
 	//Load Environment Map TODO: Eventually manage own cmd list? or have a pre-built cmd list for this purpose
 	HR_CHECK(command_list->Reset(command_allocators[frame_index].Get(), pipeline_state.Get()));
-	//TODO: FIXME: _Env images are loaded all black
-	Texture hdr_texture("data/hdr/Frozen_Waterfall_Env.hdr", DXGI_FORMAT_R32G32B32A32_FLOAT, device, gpu_memory_allocator, command_queue);
+	TextureResource hdr_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, "data/hdr/Frozen_Waterfall_Env.hdr");
+	hdr_texture.set_name(TEXT("HDR Texture"));
 	HR_CHECK(command_list->Close());
+
+
+	//TODO: render equirectangular to this cubemap
+	const UINT cube_size = 512;
+	TextureResource cubemap_texture_array(device, gpu_memory_allocator, DXGI_FORMAT_R32G32B32A32_FLOAT, cube_size, cube_size, 6);
+	cubemap_texture_array.set_name(TEXT("Cubemap Texture"));
 
 	GltfAsset gltf_asset;
 	if (!gltf_load_asset("data/meshes/sphere.glb", &gltf_asset))
@@ -991,6 +1045,7 @@ int main()
 	
 	{ //Free all memory allocated with D3D12 Memory Allocator
 		hdr_texture.release();
+		cubemap_texture_array.release();
 		
 		for (Mesh& mesh : meshes)
 		{
