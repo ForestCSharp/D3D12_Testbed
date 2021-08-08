@@ -95,6 +95,13 @@ struct GpuVertex
 	// XMFLOAT2 uv; //TODO:
 };
 
+D3D12_INPUT_ELEMENT_DESC input_element_descs[] =
+{
+	{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+	{ "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+	{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+};
+
 struct Mesh
 {
 	ComPtr<ID3D12Resource> vertex_buffer;
@@ -200,9 +207,12 @@ struct TextureResource
 	ComPtr<ID3D12Resource> texture_resource;
 	D3D12MA::Allocation* texture_allocation = nullptr;
 
-	//TODO: Stored here for convenience (for now)
+	//TODO: Won't need this SRV heap when we go bindless
 	ComPtr<ID3D12DescriptorHeap> texture_descriptor_heap_srv;
+
+	//TODO: this likely shouldn't be managed by the texture resource
 	ComPtr<ID3D12DescriptorHeap> texture_descriptor_heap_rtv;
+	std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> rtv_handles;
 	
 	TextureResource(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags, const UINT image_width, const UINT image_height, const UINT image_count)
 	{
@@ -307,11 +317,17 @@ struct TextureResource
 		texture_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 		texture_desc.Flags = flags;
 
+		D3D12_CLEAR_VALUE clear_value = {};
+		clear_value.Format = format;
+
+		const bool can_have_clear_value = (flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+									   || (flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+
 		HR_CHECK(gpu_memory_allocator->CreateResource(
             &texture_alloc_desc,
             &texture_desc,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            nullptr,
+            D3D12_RESOURCE_STATE_COMMON,
+            can_have_clear_value ? &clear_value : nullptr,
             &texture_allocation,
             IID_PPV_ARGS(&texture_resource)
         ));
@@ -377,13 +393,15 @@ struct TextureResource
 		
 		//create texture descriptor heap
 		D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc = {};
-		descriptor_heap_desc.NumDescriptors = 1;
+		descriptor_heap_desc.NumDescriptors = resource_desc.DepthOrArraySize;
 		// This heap contains SRV, UAV or CBVs -- in our case one SRV
 		descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
 		descriptor_heap_desc.NodeMask = 0;
 		descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 
 		HR_CHECK(device->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&texture_descriptor_heap_rtv)));
+		D3D12_CPU_DESCRIPTOR_HANDLE rtv_descriptor_handle = texture_descriptor_heap_rtv->GetCPUDescriptorHandleForHeapStart();
+		UINT rtv_heap_offset = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
 		const UINT16 texture_array_size = resource_desc.DepthOrArraySize;
 		const bool is_texture_array = texture_array_size > 1;
@@ -394,20 +412,25 @@ struct TextureResource
 		rtv_desc.Format = resource_desc.Format;
 		rtv_desc.ViewDimension = is_texture_array ? D3D12_RTV_DIMENSION_TEXTURE2DARRAY : D3D12_RTV_DIMENSION_TEXTURE2D;
 		
-		if (is_texture_array)
+		for (UINT i = 0; i < resource_desc.DepthOrArraySize; ++i)
 		{
-			rtv_desc.Texture2DArray.MipSlice = 0;
-			rtv_desc.Texture2DArray.FirstArraySlice = 0;
-			rtv_desc.Texture2DArray.ArraySize = texture_array_size;
-			rtv_desc.Texture2DArray.PlaneSlice = 0;
+			if (is_texture_array)
+			{
+				//Treating texture array RTVs as individual 'views' into each slice
+				rtv_desc.Texture2DArray.MipSlice = 0;
+				rtv_desc.Texture2DArray.FirstArraySlice = i;
+				rtv_desc.Texture2DArray.ArraySize = 1;
+				rtv_desc.Texture2DArray.PlaneSlice = 0;
+			}
+			else
+			{
+				rtv_desc.Texture2D.MipSlice = 0;
+				rtv_desc.Texture2D.PlaneSlice = 0;
+			}
+			device->CreateRenderTargetView(texture_resource.Get(), &rtv_desc, rtv_descriptor_handle);
+			rtv_handles.push_back(rtv_descriptor_handle);
+			rtv_descriptor_handle.ptr += rtv_heap_offset;
 		}
-		else
-		{
-			rtv_desc.Texture2D.MipSlice = 0;
-			rtv_desc.Texture2D.PlaneSlice = 0;
-		}
-
-		device->CreateRenderTargetView(texture_resource.Get(), &rtv_desc, texture_descriptor_heap_rtv->GetCPUDescriptorHandleForHeapStart());
 	}
 
 	void set_name(const LPCWSTR in_name) const
@@ -709,14 +732,6 @@ int main()
 
 	assert(vertex_shader && pixel_shader);
 
-	// 10. Define the vertex input layout.
-	D3D12_INPUT_ELEMENT_DESC input_element_descs[] =
-	{
-		{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-		{ "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-		{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
-	};
-
 	// 11. Create Graphics Pipeline State Object
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC pso_desc = {};
 
@@ -778,17 +793,206 @@ int main()
 	HR_CHECK(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocators[frame_index].Get(), pipeline_state.Get(), IID_PPV_ARGS(&command_list)));
 	HR_CHECK(command_list->Close());
 
-	//Load Environment Map TODO: Eventually manage own cmd list? or have a pre-built cmd list for this purpose
-	HR_CHECK(command_list->Reset(command_allocators[frame_index].Get(), pipeline_state.Get()));
-	TextureResource hdr_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, "data/hdr/Frozen_Waterfall_Env.hdr");
-	hdr_texture.set_name(TEXT("HDR Texture"));
-	HR_CHECK(command_list->Close());
+	//Load Environment Map
+	//TODO: remove this once we get our cubemap convolved
+	TextureResource ibl_diffuse_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, "data/hdr/Frozen_Waterfall_Env.hdr");
+	ibl_diffuse_texture.set_name(TEXT("Filtered Env Map (equirectangular)"));
+
+	TextureResource hdr_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, "data/hdr/Frozen_Waterfall_Ref.hdr");
+	hdr_texture.set_name(TEXT("Env Map (equirectangular)"));
 
 	const UINT cube_size = 512;
-	TextureResource cubemap_texture_array(device, gpu_memory_allocator, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, cube_size, cube_size, 6);
-	cubemap_texture_array.set_name(TEXT("Cubemap Texture"));
+	DXGI_FORMAT cubemap_format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+	TextureResource cubemap_texture(device, gpu_memory_allocator, cubemap_format, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, cube_size, cube_size, 6);
+	cubemap_texture.set_name(TEXT("Cubemap Texture"));
 
-	//TODO: render equirectangular to above cubemap
+	//TODO: Render Cube faces using equirectangular map
+
+	//Setup cube
+	//TODO: We render all faces at once, so we really only need one "Face" to rasterize (4 verts, 6 indices)
+	//	    Then, after its rasterized, we rotate it's world pos to sample the correct portion of the equirectangular map
+	std::vector<GpuVertex> cube_vertices =
+	{
+		{{-1.0, -1.0,  1.0}, {}, {}},
+		{{1.0, -1.0,  1.0}, {}, {}},
+		{{1.0,  1.0,  1.0}, {}, {}},
+		{{-1.0,  1.0,  1.0}, {}, {}},
+		{{-1.0, -1.0,  -1.0}, {}, {}},
+		{{1.0, -1.0,  -1.0}, {}, {}},
+		{{1.0,  1.0,  -1.0}, {}, {}},
+		{{-1.0,  1.0,  -1.0}, {}, {}},
+	};
+
+	std::vector<UINT32> cube_indices =
+	{
+		0, 1, 2, 2, 3, 0, // front
+        1, 5, 6, 6, 2, 1, // right
+        7, 6, 5, 5, 4, 7, // back
+        4, 0, 3, 3, 7, 4, // left
+        4, 5, 1, 1, 0, 4, // bottom
+        3, 2, 6, 6, 7, 3  // top
+	};
+	Mesh cube(gpu_memory_allocator, cube_vertices, cube_indices);
+
+	//TODO: look into pipeline state streams?
+	struct SimplePipelineStream
+	{
+		CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE p_root_signature;
+		CD3DX12_PIPELINE_STATE_STREAM_INPUT_LAYOUT input_layout;
+		CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY primitive_topology;
+		CD3DX12_PIPELINE_STATE_STREAM_RASTERIZER rasterizer;
+		CD3DX12_PIPELINE_STATE_STREAM_VS vs;
+		CD3DX12_PIPELINE_STATE_STREAM_PS ps;
+		CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS rtv_formats;
+	};
+
+	ComPtr<ID3D12RootSignature> cubemap_root_signature;
+	{
+		std::array<CD3DX12_ROOT_PARAMETER1,2> root_parameters;
+
+		// Constant Buffer View
+		root_parameters[0].InitAsConstantBufferView(0,0,D3D12_ROOT_DESCRIPTOR_FLAG_NONE,D3D12_SHADER_VISIBILITY_ALL);
+
+		CD3DX12_DESCRIPTOR_RANGE1 range{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0 };
+		root_parameters[1].InitAsDescriptorTable(1, &range);
+		
+		std::array<CD3DX12_STATIC_SAMPLER_DESC,1> samplers;
+		samplers[0].Init(0, D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT);
+		
+		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_signature_desc;
+		root_signature_desc.Init_1_1(root_parameters.size(), root_parameters.data(), samplers.size(), samplers.data(), D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+		
+		ComPtr<ID3DBlob> signature_blob, error_blob;
+		HR_CHECK(D3D12SerializeVersionedRootSignature(&root_signature_desc, &signature_blob, &error_blob));
+		HR_CHECK(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(&cubemap_root_signature)));
+	}
+
+	ComPtr<ID3DBlob> render_cubemap_vs = compile_shader(L"data/shaders/render_to_cubemap.hlsl", "vs_main", "vs_5_0");
+	ComPtr<ID3DBlob> render_cubemap_ps = compile_shader(L"data/shaders/render_to_cubemap.hlsl", "ps_main", "ps_5_0");
+
+	D3D12_RT_FORMAT_ARRAY rtv_formats = {};
+	rtv_formats.NumRenderTargets = 6;
+	for (UINT i = 0; i < rtv_formats.NumRenderTargets; ++i)
+	{
+		rtv_formats.RTFormats[i] = cubemap_format;
+	}
+
+	CD3DX12_RASTERIZER_DESC cube_rasterizer = {};
+	cube_rasterizer.FillMode = D3D12_FILL_MODE_SOLID;
+	cube_rasterizer.CullMode = D3D12_CULL_MODE_NONE;
+	cube_rasterizer.FrontCounterClockwise = FALSE;
+	cube_rasterizer.DepthBias = D3D12_DEFAULT_DEPTH_BIAS;
+	cube_rasterizer.DepthBiasClamp = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
+	cube_rasterizer.SlopeScaledDepthBias = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
+	cube_rasterizer.DepthClipEnable = FALSE;
+	cube_rasterizer.MultisampleEnable = FALSE;
+	cube_rasterizer.AntialiasedLineEnable = FALSE;
+	cube_rasterizer.ForcedSampleCount = 0;
+	cube_rasterizer.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+
+	SimplePipelineStream render_cube_pipe_stream;
+	render_cube_pipe_stream.p_root_signature = cubemap_root_signature.Get();
+	render_cube_pipe_stream.input_layout = { input_element_descs, _countof(input_element_descs) };
+	render_cube_pipe_stream.primitive_topology = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+	render_cube_pipe_stream.rasterizer = cube_rasterizer;
+	render_cube_pipe_stream.vs = CD3DX12_SHADER_BYTECODE(render_cubemap_vs.Get());
+	render_cube_pipe_stream.ps = CD3DX12_SHADER_BYTECODE(render_cubemap_ps.Get());
+	render_cube_pipe_stream.rtv_formats = rtv_formats;
+
+	D3D12_PIPELINE_STATE_STREAM_DESC render_cube_stream_desc = {
+		sizeof(render_cube_pipe_stream), &render_cube_pipe_stream
+    };
+
+	ComPtr<ID3D12PipelineState> render_cubemap_pipeline_state;
+	ComPtr<ID3D12Device2> device2;
+	HR_CHECK(device->QueryInterface(IID_PPV_ARGS(&device2)));
+	HR_CHECK(device2->CreatePipelineState(&render_cube_stream_desc, IID_PPV_ARGS(&render_cubemap_pipeline_state)));
+
+	D3D12MA::ALLOCATION_DESC cube_cbuffer_alloc_desc = {};
+	cube_cbuffer_alloc_desc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+ 
+	D3D12_RESOURCE_DESC cube_cbuffer_resource_desc = {};
+	cube_cbuffer_resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+	cube_cbuffer_resource_desc.Alignment = 0;
+	cube_cbuffer_resource_desc.Width = (sizeof(SceneConstantBuffer)+ 255) & ~255;
+	cube_cbuffer_resource_desc.Height = 1;
+	cube_cbuffer_resource_desc.DepthOrArraySize = 1;
+	cube_cbuffer_resource_desc.MipLevels = 1;
+	cube_cbuffer_resource_desc.Format = DXGI_FORMAT_UNKNOWN;
+	cube_cbuffer_resource_desc.SampleDesc.Count = 1;
+	cube_cbuffer_resource_desc.SampleDesc.Quality = 0;
+	cube_cbuffer_resource_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+	cube_cbuffer_resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+	
+	ComPtr<ID3D12Resource> cube_cbuffer;
+	D3D12MA::Allocation* cube_cbuffer_allocation;
+	UINT8* cube_cbuffer_address = nullptr;
+ 
+	HR_CHECK(gpu_memory_allocator->CreateResource(
+        &cube_cbuffer_alloc_desc,
+        &cube_cbuffer_resource_desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        &cube_cbuffer_allocation,
+        IID_PPV_ARGS(&cube_cbuffer)
+    ));
+ 
+	D3D12_RANGE read_range = { 0, 0 }; // We do not intend to read from these reources on the CPU.
+	HR_CHECK(cube_cbuffer->Map(0, &read_range, reinterpret_cast<void**>(&cube_cbuffer_address)));
+
+	XMVECTOR cube_cam_pos	  = XMVectorSet(0.f, 0.f, 0.f, 1.f);
+	XMVECTOR cube_cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);
+	XMVECTOR cube_cam_up	  = XMVectorSet(0.f, 1.f, 0.f, 0.f);
+
+	SceneConstantBuffer cube_cbuffer_data;
+	cube_cbuffer_data.view = XMMatrixLookAtLH(cube_cam_pos, cube_cam_forward, cube_cam_up);
+	cube_cbuffer_data.proj = XMMatrixIdentity();
+	memcpy(cube_cbuffer_address, &cube_cbuffer_data, sizeof(cube_cbuffer_data));
+
+	HR_CHECK(command_list->Reset(command_allocators[frame_index].Get(), render_cubemap_pipeline_state.Get()));
+
+	D3D12_RESOURCE_BARRIER cubemap_rt_barrier = transition_resource(cubemap_texture.texture_resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+	command_list->ResourceBarrier(1, &cubemap_rt_barrier);
+	command_list->OMSetRenderTargets(cubemap_texture.rtv_handles.size(), cubemap_texture.rtv_handles.data(), FALSE, nullptr);
+			
+	// const float clear_color[] = { 0.0f, 0.1f, 0.2f, 1.0f };
+	// command_list->ClearRenderTargetView(cubemap_rtv_handle, clear_color, 0, nullptr);
+	command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+	command_list->SetGraphicsRootSignature(cubemap_root_signature.Get());
+
+	ID3D12DescriptorHeap* cubemap_descriptor_heaps[] = { hdr_texture.texture_descriptor_heap_srv.Get() };
+	command_list->SetDescriptorHeaps(_countof(cubemap_descriptor_heaps), cubemap_descriptor_heaps);
+
+	//Slot 0: constant buffer view
+	command_list->SetGraphicsRootConstantBufferView(0, cube_cbuffer->GetGPUVirtualAddress());
+	//Slot 1: hdr texture
+	command_list->SetGraphicsRootDescriptorTable(1, hdr_texture.texture_descriptor_heap_srv->GetGPUDescriptorHandleForHeapStart());
+
+	D3D12_VIEWPORT viewport = {};
+	viewport.TopLeftX = 0.0f;
+	viewport.TopLeftY = 0.0f;
+	viewport.Width = static_cast<float>(cube_size);
+	viewport.Height = static_cast<float>(cube_size);
+	viewport.MinDepth = 0.0f;
+	viewport.MaxDepth = 1.0f;
+	command_list->RSSetViewports(1, &viewport);
+
+	D3D12_RECT scissor_rect = { 0, 0, static_cast<LONG>(cube_size), static_cast<LONG>(cube_size) };
+	command_list->RSSetScissorRects(1, &scissor_rect);
+
+	command_list->IASetVertexBuffers(0, 1, &cube.vertex_buffer_view);
+	command_list->IASetIndexBuffer(&cube.index_buffer_view);
+	const UINT num_cube_indices = cube.index_buffer_view.SizeInBytes / sizeof(UINT32);
+	command_list->DrawIndexedInstanced(num_cube_indices, 1, 0, 0, 0);
+
+	HR_CHECK(command_list->Close());
+
+	ID3D12CommandList* p_cmd_list = command_list.Get();
+	command_queue->ExecuteCommandLists(1, &p_cmd_list);
+	wait_gpu_idle(device, command_queue);
+
+	cube_cbuffer_allocation->Release();
 
 	GltfAsset gltf_asset;
 	if (!gltf_load_asset("data/meshes/sphere.glb", &gltf_asset))
@@ -1013,13 +1217,13 @@ int main()
 			command_list->SetGraphicsRootSignature(root_signature.Get());
 
 			//FCS NOTE: Only one heap of a given type can be set at a time, so we'll eventually want one big heap
-			ID3D12DescriptorHeap* ppHeaps[] = { hdr_texture.texture_descriptor_heap_srv.Get() };
-			command_list->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
+			ID3D12DescriptorHeap* descriptor_heaps[] = { ibl_diffuse_texture.texture_descriptor_heap_srv.Get() };
+			command_list->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
 
 			//Slot 0: constant buffer view
 			command_list->SetGraphicsRootConstantBufferView(0, constant_buffers[frame_index]->GetGPUVirtualAddress());
 			//Slot 1: hdr texture
-			command_list->SetGraphicsRootDescriptorTable(1, hdr_texture.texture_descriptor_heap_srv->GetGPUDescriptorHandleForHeapStart());
+			command_list->SetGraphicsRootDescriptorTable(1, ibl_diffuse_texture.texture_descriptor_heap_srv->GetGPUDescriptorHandleForHeapStart());
 
 			D3D12_VIEWPORT viewport = {};
 			viewport.TopLeftX = 0.0f;
@@ -1094,13 +1298,16 @@ int main()
 
 	
 	{ //Free all memory allocated with D3D12 Memory Allocator
+		ibl_diffuse_texture.release();
 		hdr_texture.release();
-		cubemap_texture_array.release();
+		cubemap_texture.release();
 		
 		for (Mesh& mesh : meshes)
 		{
 			mesh.release();
 		}
+
+		cube.release();
 
 		for (UINT i = 0; i < backbuffer_count; ++i)
 		{

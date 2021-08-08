@@ -26,13 +26,21 @@ cbuffer SceneConstantBuffer : register(b0)
 Texture2D<float4> hdr_texture : register(t0);
 SamplerState      hdr_sampler : register(s0);
 
-float2 sample_spherical_map(const float3 v)
+float2 spherical_uv(const float3 v)
 {
     float2 uv = float2(atan2(v.z, v.x), asin(v.y));
     const float2 inv_atan = float2(0.1591, 0.3183);
     uv *= inv_atan;
     uv += 0.5;
     return uv;
+}
+
+//TODO: replace with cubemap once we've computed it
+float4 sample_environment_map(const float3 v)
+{
+    float2 uv = spherical_uv(v);
+    const float3 color = hdr_texture.Sample(hdr_sampler, uv).rgb;
+    return float4(color, 1);
 }
 
 static matrix identity =
@@ -134,8 +142,7 @@ float4 ps_main(const PsInput input) : SV_TARGET
     }
 
     //Sample environment map
-    const float2 spherical_uv = sample_spherical_map(normal);
-    const float3 irradiance = hdr_texture.Sample(hdr_sampler, spherical_uv).rgb;
+    const float3 irradiance = sample_environment_map(normal).rgb;
     
     const float3 ks = fresnel_schlick(max(dot(normal, view_dir), 0.0), f0);
     float3 kd = 1.0 - ks;
