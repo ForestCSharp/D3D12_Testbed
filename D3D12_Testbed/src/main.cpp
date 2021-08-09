@@ -187,6 +187,11 @@ struct Mesh
 		index_buffer_view.Format = DXGI_FORMAT_R32_UINT;
 	}
 
+	UINT num_indices() const
+	{
+		return index_buffer_view.SizeInBytes / sizeof(UINT32);
+	}
+
 	void release()
 	{
 		if (vertex_buffer_allocation)
@@ -983,8 +988,7 @@ int main()
 
 	command_list->IASetVertexBuffers(0, 1, &cube.vertex_buffer_view);
 	command_list->IASetIndexBuffer(&cube.index_buffer_view);
-	const UINT num_cube_indices = cube.index_buffer_view.SizeInBytes / sizeof(UINT32);
-	command_list->DrawIndexedInstanced(num_cube_indices, 1, 0, 0, 0);
+	command_list->DrawIndexedInstanced(cube.num_indices(), 1, 0, 0, 0);
 
 	HR_CHECK(command_list->Close());
 
@@ -1257,8 +1261,7 @@ int main()
 			{
 				command_list->IASetVertexBuffers(0, 1, &mesh.vertex_buffer_view);
 				command_list->IASetIndexBuffer(&mesh.index_buffer_view);
-				UINT num_indices = mesh.index_buffer_view.SizeInBytes / sizeof(UINT32);
-				command_list->DrawIndexedInstanced(num_indices, 100, 0, 0, 0);
+				command_list->DrawIndexedInstanced(mesh.num_indices(), 100, 0, 0, 0);
 			}
 			
 			// Indicate that the back buffer will now be used to present.
