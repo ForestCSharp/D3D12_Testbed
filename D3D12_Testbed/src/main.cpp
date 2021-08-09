@@ -923,9 +923,7 @@ int main()
 	auto cubemap_rt_barrier = CD3DX12_RESOURCE_BARRIER::Transition(cubemap_texture.texture_resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
 	command_list->ResourceBarrier(1, &cubemap_rt_barrier);
 	command_list->OMSetRenderTargets(cubemap_texture.rtv_handles.size(), cubemap_texture.rtv_handles.data(), FALSE, nullptr);
-			
-	// const float clear_color[] = { 0.0f, 0.1f, 0.2f, 1.0f };
-	// command_list->ClearRenderTargetView(cubemap_rtv_handle, clear_color, 0, nullptr);
+
 	command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
 	command_list->SetGraphicsRootSignature(cubemap_root_signature.Get());
@@ -953,6 +951,11 @@ int main()
 	command_list->IASetVertexBuffers(0, 1, &cube.vertex_buffer_view);
 	command_list->IASetIndexBuffer(&cube.index_buffer_view);
 	command_list->DrawIndexedInstanced(cube.index_count(), 1, 0, 0, 0);
+
+	auto cubemap_pixel_shader_barrier = CD3DX12_RESOURCE_BARRIER::Transition(cubemap_texture.texture_resource.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	command_list->ResourceBarrier(1, &cubemap_pixel_shader_barrier);
+
+	//TODO: now we use our cubemap as a pixel shader resource and convolute
 
 	HR_CHECK(command_list->Close());
 
