@@ -73,13 +73,6 @@ void wait_gpu_idle(ComPtr<ID3D12Device> device, ComPtr<ID3D12CommandQueue> comma
 	WaitForSingleObject(fence_event, INFINITE);
 }
 
-//TODO: struct to pass around common D3D12 objects
-// device
-// allocator
-// command_queue
-// per-frame command lists?
-// staging command list?
-
 struct SceneConstantBuffer
 {
 	XMMATRIX view;
@@ -101,6 +94,9 @@ D3D12_INPUT_ELEMENT_DESC input_element_descs[] =
 	{ "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
 	{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
 };
+
+// We do not intend to read from these reources on the CPU.
+static const D3D12_RANGE no_read_range = { 0, 0 };
 
 struct Mesh
 {
@@ -147,11 +143,9 @@ struct Mesh
 			IID_PPV_ARGS(&vertex_buffer)
 		));
 
-		D3D12_RANGE read_range = { 0, 0 }; // We do not intend to read from these reources on the CPU.
-
 		// Copy the triangle data to the vertex buffer.
 		UINT8* vertex_data_begin;
-		HR_CHECK(vertex_buffer->Map(0, &read_range, reinterpret_cast<void**>(&vertex_data_begin)));
+		HR_CHECK(vertex_buffer->Map(0, &no_read_range, reinterpret_cast<void**>(&vertex_data_begin)));
 		memcpy(vertex_data_begin, vertices.data(), vertices_size);
 		vertex_buffer->Unmap(0, nullptr);
 
@@ -177,7 +171,7 @@ struct Mesh
 
 		//Copy index data
 		UINT8* index_data_begin;
-		HR_CHECK(index_buffer->Map(0, &read_range, reinterpret_cast<void**>(&index_data_begin)));
+		HR_CHECK(index_buffer->Map(0, &no_read_range, reinterpret_cast<void**>(&index_data_begin)));
 		memcpy(index_data_begin, indices.data(), indices_size);
 		index_buffer->Unmap(0, nullptr);
 
@@ -187,7 +181,7 @@ struct Mesh
 		index_buffer_view.Format = DXGI_FORMAT_R32_UINT;
 	}
 
-	UINT num_indices() const
+	UINT index_count() const
 	{
 		return index_buffer_view.SizeInBytes / sizeof(UINT32);
 	}
@@ -394,7 +388,7 @@ struct TextureResource
 	void create_rtv_descriptor_heap(const ComPtr<ID3D12Device> device)
 	{
 		D3D12_RESOURCE_DESC resource_desc = texture_resource->GetDesc();
-		assert(resource_desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET == D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+		assert(resource_desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
 		
 		//create texture descriptor heap
 		D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc = {};
@@ -465,25 +459,6 @@ struct TextureResource
 */
 
 static const UINT backbuffer_count = 3;
-
-/*  Almost identical to CD3DX12_RESOURCE_BARRIER::Transition in d3dx12.h
-	(helper file provided by microsoft that we've opted to not use) */
-static D3D12_RESOURCE_BARRIER transition_resource(
-	ID3D12Resource* in_resource,
-	const D3D12_RESOURCE_STATES state_before,
-	const D3D12_RESOURCE_STATES state_after,
-	const UINT subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-	const D3D12_RESOURCE_BARRIER_FLAGS flags = D3D12_RESOURCE_BARRIER_FLAG_NONE)
-{
-	D3D12_RESOURCE_BARRIER result = {};
-	result.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-	result.Flags = flags;
-	result.Transition.pResource = in_resource;
-	result.Transition.StateBefore = state_before;
-	result.Transition.StateAfter = state_after;
-	result.Transition.Subresource = subresource;
-	return result;
-}
 
 bool is_key_down(const int in_key)
 {
@@ -811,10 +786,8 @@ int main()
 	TextureResource cubemap_texture(device, gpu_memory_allocator, cubemap_format, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, cube_size, cube_size, 6);
 	cubemap_texture.set_name(TEXT("Cubemap Texture"));
 
-	//TODO: Render Cube faces using equirectangular map
-
 	//Setup cube
-	//TODO: We render all faces at once, so we really only need one "Face" to rasterize (4 verts, 6 indices)
+	//Note: We render all faces at once, so we really only need one "Face" to rasterize (4 verts, 6 indices)
 	//	    Then, after its rasterized, we rotate it's world pos to sample the correct portion of the equirectangular map
 	std::vector<GpuVertex> cube_vertices =
 	{
@@ -837,9 +810,9 @@ int main()
         4, 5, 1, 1, 0, 4, // bottom
         3, 2, 6, 6, 7, 3  // top
 	};
+	
 	Mesh cube(gpu_memory_allocator, cube_vertices, cube_indices);
 
-	//TODO: look into pipeline state streams?
 	struct SimplePipelineStream
 	{
 		CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE p_root_signature;
@@ -942,8 +915,7 @@ int main()
         IID_PPV_ARGS(&cube_cbuffer)
     ));
  
-	D3D12_RANGE read_range = { 0, 0 }; // We do not intend to read from these reources on the CPU.
-	HR_CHECK(cube_cbuffer->Map(0, &read_range, reinterpret_cast<void**>(&cube_cbuffer_address)));
+	HR_CHECK(cube_cbuffer->Map(0, &no_read_range, reinterpret_cast<void**>(&cube_cbuffer_address)));
 
 	XMVECTOR cube_cam_pos	  = XMVectorSet(0.f, 0.f, 0.f, 1.f);
 	XMVECTOR cube_cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);
@@ -956,7 +928,7 @@ int main()
 
 	HR_CHECK(command_list->Reset(command_allocators[frame_index].Get(), render_cubemap_pipeline_state.Get()));
 
-	D3D12_RESOURCE_BARRIER cubemap_rt_barrier = transition_resource(cubemap_texture.texture_resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+	auto cubemap_rt_barrier = CD3DX12_RESOURCE_BARRIER::Transition(cubemap_texture.texture_resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
 	command_list->ResourceBarrier(1, &cubemap_rt_barrier);
 	command_list->OMSetRenderTargets(cubemap_texture.rtv_handles.size(), cubemap_texture.rtv_handles.data(), FALSE, nullptr);
 			
@@ -974,21 +946,21 @@ int main()
 	//Slot 1: hdr texture
 	command_list->SetGraphicsRootDescriptorTable(1, hdr_texture.texture_descriptor_heap_srv->GetGPUDescriptorHandleForHeapStart());
 
-	D3D12_VIEWPORT viewport = {};
-	viewport.TopLeftX = 0.0f;
-	viewport.TopLeftY = 0.0f;
-	viewport.Width = static_cast<float>(cube_size);
-	viewport.Height = static_cast<float>(cube_size);
-	viewport.MinDepth = 0.0f;
-	viewport.MaxDepth = 1.0f;
-	command_list->RSSetViewports(1, &viewport);
+	D3D12_VIEWPORT cubemap_viewport = {};
+	cubemap_viewport.TopLeftX = 0.0f;
+	cubemap_viewport.TopLeftY = 0.0f;
+	cubemap_viewport.Width = static_cast<float>(cube_size);
+	cubemap_viewport.Height = static_cast<float>(cube_size);
+	cubemap_viewport.MinDepth = 0.0f;
+	cubemap_viewport.MaxDepth = 1.0f;
+	command_list->RSSetViewports(1, &cubemap_viewport);
 
-	D3D12_RECT scissor_rect = { 0, 0, static_cast<LONG>(cube_size), static_cast<LONG>(cube_size) };
-	command_list->RSSetScissorRects(1, &scissor_rect);
+	const D3D12_RECT cubemap_scissor_rect = { 0, 0, static_cast<LONG>(cube_size), static_cast<LONG>(cube_size) };
+	command_list->RSSetScissorRects(1, &cubemap_scissor_rect);
 
 	command_list->IASetVertexBuffers(0, 1, &cube.vertex_buffer_view);
 	command_list->IASetIndexBuffer(&cube.index_buffer_view);
-	command_list->DrawIndexedInstanced(cube.num_indices(), 1, 0, 0, 0);
+	command_list->DrawIndexedInstanced(cube.index_count(), 1, 0, 0, 0);
 
 	HR_CHECK(command_list->Close());
 
@@ -1104,16 +1076,8 @@ int main()
 			IID_PPV_ARGS(&constant_buffer)
 		));
 
-		// Describe and create a constant buffer view.
-		// D3D12_CONSTANT_BUFFER_VIEW_DESC cbv_desc = {};
-		// cbv_desc.BufferLocation = constant_buffer->GetGPUVirtualAddress();
-		// cbv_desc.SizeInBytes = static_cast<UINT>(resource_desc.Width);
-		// device->CreateConstantBufferView(&cbv_desc, cbv_descriptor_heaps[i]->GetCPUDescriptorHandleForHeapStart());
-
-		// Map and initialize the constant buffer. We don't unmap this until the
-		// app closes. Keeping things mapped for the lifetime of the resource is okay.
-		D3D12_RANGE read_range = { 0, 0 }; // We do not intend to read from these reources on the CPU.
-		HR_CHECK(constant_buffer->Map(0, &read_range, reinterpret_cast<void**>(&cbv_gpu_addresses[i])));
+		// Map and initialize the constant buffer. We don't unmap this until the app closes, as we constantly update it
+		HR_CHECK(constant_buffer->Map(0, &no_read_range, reinterpret_cast<void**>(&cbv_gpu_addresses[i])));
 	}
 
 	// Create synchronization objects and wait until assets have been uploaded to the GPU.
@@ -1201,8 +1165,6 @@ int main()
 				//FCS TODO: Cam Rotation Control
 			}
 
-			//FCS TODO: FIXME: Bad matrix multiplies messing with depth test?
-
 			XMVECTOR target = cam_pos + cam_forward;
 			scene_constant_buffer_data.view = XMMatrixLookAtLH(cam_pos, target, cam_up);
 
@@ -1238,11 +1200,11 @@ int main()
 			viewport.MaxDepth = 1.0f;
 			command_list->RSSetViewports(1, &viewport);
 
-			D3D12_RECT scissor_rect = { 0, 0, static_cast<LONG>(width), static_cast<LONG>(height) };
+			const D3D12_RECT scissor_rect = { 0, 0, static_cast<LONG>(width), static_cast<LONG>(height) };
 			command_list->RSSetScissorRects(1, &scissor_rect);
 
 			// Indicate that the back buffer will be used as a render target.
-			D3D12_RESOURCE_BARRIER present_to_rt_barrier = transition_resource(render_targets[frame_index].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+			auto present_to_rt_barrier = CD3DX12_RESOURCE_BARRIER::Transition(render_targets[frame_index].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 			command_list->ResourceBarrier(1, &present_to_rt_barrier);
 
 			D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
@@ -1261,11 +1223,11 @@ int main()
 			{
 				command_list->IASetVertexBuffers(0, 1, &mesh.vertex_buffer_view);
 				command_list->IASetIndexBuffer(&mesh.index_buffer_view);
-				command_list->DrawIndexedInstanced(mesh.num_indices(), 100, 0, 0, 0);
+				command_list->DrawIndexedInstanced(mesh.index_count(), 100, 0, 0, 0);
 			}
 			
 			// Indicate that the back buffer will now be used to present.
-			D3D12_RESOURCE_BARRIER rt_to_present_barrier = transition_resource(render_targets[frame_index].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+			auto rt_to_present_barrier = CD3DX12_RESOURCE_BARRIER::Transition(render_targets[frame_index].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 			command_list->ResourceBarrier(1, &rt_to_present_barrier);
 
 			HR_CHECK(command_list->Close());
