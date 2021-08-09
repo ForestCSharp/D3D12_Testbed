@@ -465,14 +465,6 @@ bool is_key_down(const int in_key)
 	return GetKeyState(in_key) & 0x8000;
 }
 
-bool should_close = false;
-
-LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
-{
-	if (message == WM_CLOSE) should_close = true;
-	return DefWindowProc(window, message, wParam, lParam);
-}
-
 int main()
 {	
 	// 1. Create Our Window
@@ -481,7 +473,7 @@ int main()
 	WNDCLASSEX window_class = { 0 };
 	window_class.cbSize = sizeof(WNDCLASSEX);
 	window_class.style = CS_HREDRAW | CS_VREDRAW;
-	window_class.lpfnWndProc = window_proc;
+	window_class.lpfnWndProc = DefWindowProc;
 	window_class.hInstance = h_instance;
 	window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
 	window_class.lpszClassName = L"DXSampleClass";
@@ -1120,8 +1112,10 @@ int main()
 	double accumulated_delta_time = 0.0f;
 	size_t frames_rendered = 0;
 	
+	bool should_close = false;
+	
 	while (!should_close)
-	{
+	{		
 		//TODO: RenderTarget Resizing
 		
 		clock_t new_time = clock();
@@ -1130,11 +1124,6 @@ int main()
 
 		accumulated_delta_time += delta_time;
 		frames_rendered++;
-		
-		if (is_key_down(VK_ESCAPE))
-		{
-			should_close = true;
-		}
 		
 		// Process any messages in the queue.
 		MSG msg = {};
@@ -1256,6 +1245,11 @@ int main()
 
 				fence_values[frame_index] = current_fence_value + 1;
 			}
+		}
+
+		if (is_key_down(VK_ESCAPE) || !IsWindow(window) )
+		{
+			should_close = true;
 		}
 	}
 
