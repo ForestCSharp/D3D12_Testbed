@@ -22,8 +22,9 @@ cbuffer SceneConstantBuffer : register(b0)
 Texture2D<float4> hdr_texture : register(t0);
 SamplerState      hdr_sampler : register(s0);
 
-float2 spherical_uv(const float3 v)
+float2 spherical_uv(float3 v)
 {
+    v = normalize(v);
     float2 uv = float2(atan2(v.z, v.x), asin(v.y));
     const float2 inv_atan = float2(0.1591, 0.3183);
     uv *= inv_atan;
@@ -109,16 +110,14 @@ PsOutput ps_main(const PsInput input) : SV_TARGET
 {
     PsOutput output;
 
-    float3 world_pos = normalize(input.world_pos);
+    float3 sample_dir = normalize(input.world_pos);
 
-    output.front  = sample_spherical_map(input.world_pos);
-    output.back   = sample_spherical_map(float3_rotate_angle_axis(world_pos, float3(0,1,0), 180));
-    output.left   = sample_spherical_map(float3_rotate_angle_axis(world_pos, float3(0,1,0), -90));
-    output.right  = sample_spherical_map(float3_rotate_angle_axis(world_pos, float3(0,1,0), 90));
-
-    //FCS TODO: These are busted
-    output.top    = sample_spherical_map(float3_rotate_angle_axis(world_pos, float3(1,0,0), 90));
-    output.bottom = sample_spherical_map(float3_rotate_angle_axis(world_pos, float3(1,0,0), -90));
+    output.front  = sample_spherical_map(sample_dir);
+    output.back   = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 180));
+    output.left   = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), -90));
+    output.right  = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 90));
+    output.top    = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(1,0,0), 90));
+    output.bottom = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(1,0,0), -90));
 
     return output;
 }

@@ -26,8 +26,9 @@ cbuffer SceneConstantBuffer : register(b0)
 Texture2D<float4> hdr_texture : register(t0);
 SamplerState      hdr_sampler : register(s0);
 
-float2 spherical_uv(const float3 v)
+float2 spherical_uv(float3 v)
 {
+    v = normalize(v);
     float2 uv = float2(atan2(v.z, v.x), asin(v.y));
     const float2 inv_atan = float2(0.1591, 0.3183);
     uv *= inv_atan;
@@ -38,7 +39,7 @@ float2 spherical_uv(const float3 v)
 //TODO: replace with cubemap once we've computed it
 float4 sample_environment_map(const float3 v)
 {
-    float2 uv = spherical_uv(v);
+    const float2 uv = spherical_uv(v);
     const float3 color = hdr_texture.Sample(hdr_sampler, uv).rgb;
     return float4(color, 1);
 }
