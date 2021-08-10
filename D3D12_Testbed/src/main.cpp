@@ -14,7 +14,6 @@ using Microsoft::WRL::ComPtr;
 using namespace DirectX;
 
 //Std Lib
-#include <iostream>
 #include <vector>
 #include <array>
 using std::array;
@@ -38,7 +37,7 @@ using std::array;
 	HRESULT result = (expr);\
 	if (FAILED(result))\
 	{\
-		std::cout << "FAILED HRESULT. line: " << __LINE__ << " code: " << #expr << " error: " << std::hex << result << std::endl;\
+		printf("FAILED HRESULT: Line: %i Code: %s Error: %x\n", __LINE__, #expr, result); \
 		exit(-1);\
 	}\
 }\
@@ -54,7 +53,7 @@ ComPtr<ID3DBlob> compile_shader(const LPCWSTR file_name, const LPCSTR entry_poin
 	if (FAILED(hr) && error_messages)
 	{
 		const char* error_message = static_cast<const char*>(error_messages->GetBufferPointer());
-		std::cout << error_message << std::endl;
+		printf("CompileShader Error: %s\n", error_message);
 	}
 
 	return out_shader;
@@ -95,7 +94,7 @@ D3D12_INPUT_ELEMENT_DESC input_element_descs[] =
 	{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
 };
 
-// We do not intend to read from these reources on the CPU.
+// We do not intend to read from these resources on the CPU.
 static const D3D12_RANGE no_read_range = { 0, 0 };
 
 struct Mesh
@@ -291,7 +290,7 @@ struct TextureResource
 		}
 		else
 		{
-			std::cout << "Failed to load texture: " << file << std::endl;
+			printf("Failed to load texture\n");
 		}
 	}
 
@@ -968,7 +967,7 @@ int main()
 	GltfAsset gltf_asset;
 	if (!gltf_load_asset("data/meshes/sphere.glb", &gltf_asset))
 	{
-		std::cout << "FAILED TO LOAD GLTF ASSET" << std::endl;
+		printf("FAILED TO LOAD GLTF ASSET\n");
 		exit(1);
 	}
 	assert(gltf_asset.num_meshes > 0);
