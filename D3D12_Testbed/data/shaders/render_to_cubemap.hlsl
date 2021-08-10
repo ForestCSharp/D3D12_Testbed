@@ -76,12 +76,13 @@ PsInput vs_main(const float3 position : POSITION, const float3 normal : NORMAL, 
 
 struct PsOutput
 {
+	//TODO: FIX Names
     float4 front: SV_Target0;
     float4 back: SV_Target1;
-    float4 left: SV_Target2;
-    float4 right: SV_Target3;
-    float4 top: SV_Target4;
-    float4 bottom: SV_Target5;
+    float4 top: SV_Target2;
+    float4 bottom: SV_Target3;
+    float4 left: SV_Target4;
+    float4 right: SV_Target5;
 };
 
 float3x3 angle_axis_3x3(float angle, float3 axis)
@@ -114,10 +115,17 @@ PsOutput ps_main(const PsInput input) : SV_TARGET
 
     output.front   = sample_spherical_map(sample_dir);
     output.back    = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 180));
-    output.left    = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(1,0,0), 90));
-    output.right   = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(1,0,0), -90));
-    output.top     = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), -90));
-    output.bottom  = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 90));
+
+	float3 top_dir = float3_rotate_angle_axis(sample_dir, float3(0,0,1), 90);
+	top_dir 	   = float3_rotate_angle_axis(top_dir, float3(1,0,0), 90);
+    output.top     = sample_spherical_map(top_dir);
+
+	float3 bot_dir = float3_rotate_angle_axis(sample_dir, float3(0,0,1), -90);
+	bot_dir 	   = float3_rotate_angle_axis(bot_dir, float3(1,0,0), -90);
+    output.bottom  = sample_spherical_map(bot_dir);
+
+    output.left    = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), -90));
+    output.right   = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 90));
 
     return output;
 }

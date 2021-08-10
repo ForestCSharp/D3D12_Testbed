@@ -1197,8 +1197,6 @@ int main()
 		const float mouse_delta_x = static_cast<float>(mouse_pos.x - last_mouse_pos.x) / width;
 		const float mouse_delta_y = static_cast<float>(mouse_pos.y - last_mouse_pos.y) / height;
 		last_mouse_pos = mouse_pos;
-
-		printf("MouseDelta: [%f,%f]\n", mouse_delta_x, mouse_delta_y);
 		
 		// Process any messages in the queue.
 		MSG msg = {};
