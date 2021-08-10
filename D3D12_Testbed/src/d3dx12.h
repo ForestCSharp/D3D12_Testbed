@@ -163,7 +163,7 @@ inline bool operator==( const D3D12_BOX& l, const D3D12_BOX& r ) noexcept
 inline bool operator!=( const D3D12_BOX& l, const D3D12_BOX& r ) noexcept
 { return !( l == r ); }
 
-//------------------------------------------------------------------------------------------------
+//------------------------------------------------------------------------------------------------f
 struct CD3DX12_DEPTH_STENCIL_DESC : public D3D12_DEPTH_STENCIL_DESC
 {
     CD3DX12_DEPTH_STENCIL_DESC() = default;

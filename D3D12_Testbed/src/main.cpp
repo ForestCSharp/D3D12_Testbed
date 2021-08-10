@@ -207,6 +207,7 @@ struct TextureResource
 
 	//TODO: Won't need this SRV heap when we go bindless
 	ComPtr<ID3D12DescriptorHeap> texture_descriptor_heap_srv;
+	ComPtr<ID3D12DescriptorHeap> cubemap_descriptor_heap_srv;
 
 	//TODO: this likely shouldn't be managed by the texture resource
 	ComPtr<ID3D12DescriptorHeap> texture_descriptor_heap_rtv;
@@ -330,19 +331,19 @@ struct TextureResource
             IID_PPV_ARGS(&texture_resource)
         ));
 
-		create_srv_descriptor_heap(device);
+		create_basic_srv(device);
 
 		//Create rtv if we can be a render target
 		if (flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
 		{
-			create_rtv_descriptor_heap(device);
+			create_rtv(device);
 		}
 	}
 
 	//TODO: Should likely be separated from TextureResource struct
 	//Creates a basic SRV for this texture resource
 	//TODO: RTV
-	void create_srv_descriptor_heap(const ComPtr<ID3D12Device> device)
+	void create_basic_srv(const ComPtr<ID3D12Device> device)
 	{
 		//create texture descriptor heap
 		D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc = {};
@@ -384,7 +385,35 @@ struct TextureResource
 		device->CreateShaderResourceView(texture_resource.Get(), &srv_desc, texture_descriptor_heap_srv->GetCPUDescriptorHandleForHeapStart());
 	}
 
-	void create_rtv_descriptor_heap(const ComPtr<ID3D12Device> device)
+	void create_cubemap_srv(const ComPtr<ID3D12Device> device)
+	{
+		//create texture descriptor heap
+		D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc = {};
+		descriptor_heap_desc.NumDescriptors = 1;
+		// This heap contains SRV, UAV or CBVs -- in our case one SRV
+		descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+		descriptor_heap_desc.NodeMask = 0;
+		descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+
+		HR_CHECK(device->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&cubemap_descriptor_heap_srv)));
+
+		const UINT16 texture_array_size = texture_resource->GetDesc().DepthOrArraySize;
+		assert(texture_array_size >= 6);
+		
+		D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+		
+		//Shared State
+		srv_desc.Format = texture_resource->GetDesc().Format;
+		srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+		srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		srv_desc.TextureCube.MostDetailedMip = 0;
+		srv_desc.TextureCube.MipLevels = 1;
+		srv_desc.TextureCube.ResourceMinLODClamp = 0.f;
+		
+		device->CreateShaderResourceView(texture_resource.Get(), &srv_desc, cubemap_descriptor_heap_srv->GetCPUDescriptorHandleForHeapStart());
+	}
+
+	void create_rtv(const ComPtr<ID3D12Device> device)
 	{
 		D3D12_RESOURCE_DESC resource_desc = texture_resource->GetDesc();
 		assert(resource_desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
@@ -690,7 +719,9 @@ int main()
 		samplers[0].Init(0, D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT);
 		
 		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_signature_desc;
-		root_signature_desc.Init_1_1(root_parameters.size(), root_parameters.data(), samplers.size(), samplers.data(), D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+		root_signature_desc.Init_1_1(static_cast<UINT>(root_parameters.size()), root_parameters.data(),
+									 static_cast<UINT>(samplers.size()), samplers.data(),
+									 D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 		
 		ComPtr<ID3DBlob> signature_blob, error_blob;
 		HR_CHECK(D3D12SerializeVersionedRootSignature(&root_signature_desc, &signature_blob, &error_blob));
@@ -776,6 +807,7 @@ int main()
 	DXGI_FORMAT cubemap_format = DXGI_FORMAT_R32G32B32A32_FLOAT;
 	TextureResource cubemap_texture(device, gpu_memory_allocator, cubemap_format, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, cube_size, cube_size, 6);
 	cubemap_texture.set_name(TEXT("Cubemap Texture"));
+	cubemap_texture.create_cubemap_srv(device);
 
 	//Setup cube
 	//Note: We render all faces at once, so we really only need one "Face" to rasterize (4 verts, 6 indices)
@@ -804,12 +836,14 @@ int main()
 	
 	Mesh cube(gpu_memory_allocator, cube_vertices, cube_indices);
 
+	//TODO: Replace with a pipeline builder
 	struct SimplePipelineStream
 	{
 		CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE p_root_signature;
 		CD3DX12_PIPELINE_STATE_STREAM_INPUT_LAYOUT input_layout;
 		CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY primitive_topology;
 		CD3DX12_PIPELINE_STATE_STREAM_RASTERIZER rasterizer;
+		CD3DX12_PIPELINE_STATE_STREAM_DEPTH_STENCIL depth_stencil;
 		CD3DX12_PIPELINE_STATE_STREAM_VS vs;
 		CD3DX12_PIPELINE_STATE_STREAM_PS ps;
 		CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS rtv_formats;
@@ -829,53 +863,81 @@ int main()
 		samplers[0].Init(0, D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT);
 		
 		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_signature_desc;
-		root_signature_desc.Init_1_1(root_parameters.size(), root_parameters.data(), samplers.size(), samplers.data(), D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+		root_signature_desc.Init_1_1(static_cast<UINT>(root_parameters.size()), root_parameters.data(),
+									 static_cast<UINT>(samplers.size()), samplers.data(),
+									 D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 		
 		ComPtr<ID3DBlob> signature_blob, error_blob;
 		HR_CHECK(D3D12SerializeVersionedRootSignature(&root_signature_desc, &signature_blob, &error_blob));
 		HR_CHECK(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(&cubemap_root_signature)));
 	}
 
-	ComPtr<ID3DBlob> render_cubemap_vs = compile_shader(L"data/shaders/render_to_cubemap.hlsl", "vs_main", "vs_5_0");
-	ComPtr<ID3DBlob> render_cubemap_ps = compile_shader(L"data/shaders/render_to_cubemap.hlsl", "ps_main", "ps_5_0");
+	ComPtr<ID3DBlob> spherical_to_cube_vs = compile_shader(L"data/shaders/render_to_cubemap.hlsl", "vs_main", "vs_5_0");
+	ComPtr<ID3DBlob> spherical_to_cube_ps = compile_shader(L"data/shaders/render_to_cubemap.hlsl", "ps_main", "ps_5_0");
+	
+	ComPtr<ID3DBlob> skybox_vs = compile_shader(L"data/shaders/skybox.hlsl", "vs_main", "vs_5_0");
+	ComPtr<ID3DBlob> skybox_ps = compile_shader(L"data/shaders/skybox.hlsl", "ps_main", "ps_5_0");
 
-	D3D12_RT_FORMAT_ARRAY rtv_formats = {};
-	rtv_formats.NumRenderTargets = 6;
-	for (UINT i = 0; i < rtv_formats.NumRenderTargets; ++i)
+	D3D12_RT_FORMAT_ARRAY sphere_to_cube_rtv_formats = {};
+	sphere_to_cube_rtv_formats.NumRenderTargets = 6;
+	for (UINT i = 0; i < sphere_to_cube_rtv_formats.NumRenderTargets; ++i)
 	{
-		rtv_formats.RTFormats[i] = cubemap_format;
+		sphere_to_cube_rtv_formats.RTFormats[i] = cubemap_format;
 	}
 
-	CD3DX12_RASTERIZER_DESC cube_rasterizer = {};
-	cube_rasterizer.FillMode = D3D12_FILL_MODE_SOLID;
-	cube_rasterizer.CullMode = D3D12_CULL_MODE_NONE;
-	cube_rasterizer.FrontCounterClockwise = FALSE;
-	cube_rasterizer.DepthBias = D3D12_DEFAULT_DEPTH_BIAS;
-	cube_rasterizer.DepthBiasClamp = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
-	cube_rasterizer.SlopeScaledDepthBias = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
-	cube_rasterizer.DepthClipEnable = FALSE;
-	cube_rasterizer.MultisampleEnable = FALSE;
-	cube_rasterizer.AntialiasedLineEnable = FALSE;
-	cube_rasterizer.ForcedSampleCount = 0;
-	cube_rasterizer.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+	CD3DX12_RASTERIZER_DESC stream_rasterizer = {};
+	stream_rasterizer.FillMode = D3D12_FILL_MODE_SOLID;
+	stream_rasterizer.CullMode = D3D12_CULL_MODE_NONE;
+	stream_rasterizer.FrontCounterClockwise = FALSE;
+	stream_rasterizer.DepthBias = D3D12_DEFAULT_DEPTH_BIAS;
+	stream_rasterizer.DepthBiasClamp = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
+	stream_rasterizer.SlopeScaledDepthBias = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
+	stream_rasterizer.DepthClipEnable = FALSE;
+	stream_rasterizer.MultisampleEnable = FALSE;
+	stream_rasterizer.AntialiasedLineEnable = FALSE;
+	stream_rasterizer.ForcedSampleCount = 0;
+	stream_rasterizer.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
 
-	SimplePipelineStream render_cube_pipe_stream;
-	render_cube_pipe_stream.p_root_signature = cubemap_root_signature.Get();
-	render_cube_pipe_stream.input_layout = { input_element_descs, _countof(input_element_descs) };
-	render_cube_pipe_stream.primitive_topology = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-	render_cube_pipe_stream.rasterizer = cube_rasterizer;
-	render_cube_pipe_stream.vs = CD3DX12_SHADER_BYTECODE(render_cubemap_vs.Get());
-	render_cube_pipe_stream.ps = CD3DX12_SHADER_BYTECODE(render_cubemap_ps.Get());
-	render_cube_pipe_stream.rtv_formats = rtv_formats;
+	CD3DX12_DEPTH_STENCIL_DESC disable_depth_stencil = {};
+	disable_depth_stencil.DepthEnable = FALSE;
+	disable_depth_stencil.StencilEnable = FALSE;
 
-	D3D12_PIPELINE_STATE_STREAM_DESC render_cube_stream_desc = {
-		sizeof(render_cube_pipe_stream), &render_cube_pipe_stream
-    };
+	SimplePipelineStream spherical_to_cube_pipeline_stream;
+	spherical_to_cube_pipeline_stream.p_root_signature = cubemap_root_signature.Get();
+	spherical_to_cube_pipeline_stream.input_layout = { input_element_descs, _countof(input_element_descs) };
+	spherical_to_cube_pipeline_stream.primitive_topology = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+	spherical_to_cube_pipeline_stream.rasterizer = stream_rasterizer;
+	spherical_to_cube_pipeline_stream.depth_stencil = disable_depth_stencil;
+	spherical_to_cube_pipeline_stream.vs = CD3DX12_SHADER_BYTECODE(spherical_to_cube_vs.Get());
+	spherical_to_cube_pipeline_stream.ps = CD3DX12_SHADER_BYTECODE(spherical_to_cube_ps.Get());
+	spherical_to_cube_pipeline_stream.rtv_formats = sphere_to_cube_rtv_formats;
+	
+	SimplePipelineStream skybox_pipeline_stream;
+	skybox_pipeline_stream.p_root_signature = cubemap_root_signature.Get();
+	skybox_pipeline_stream.input_layout = { input_element_descs, _countof(input_element_descs) };
+	skybox_pipeline_stream.primitive_topology = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+	skybox_pipeline_stream.rasterizer = stream_rasterizer;
+	//TODO: DSV Format
+	skybox_pipeline_stream.vs = CD3DX12_SHADER_BYTECODE(skybox_vs.Get());
+	skybox_pipeline_stream.ps = CD3DX12_SHADER_BYTECODE(skybox_ps.Get());
+	skybox_pipeline_stream.rtv_formats = sphere_to_cube_rtv_formats; //TODO: FixMe
 
-	ComPtr<ID3D12PipelineState> render_cubemap_pipeline_state;
 	ComPtr<ID3D12Device2> device2;
 	HR_CHECK(device->QueryInterface(IID_PPV_ARGS(&device2)));
-	HR_CHECK(device2->CreatePipelineState(&render_cube_stream_desc, IID_PPV_ARGS(&render_cubemap_pipeline_state)));
+
+	//Spherical to cubemap pipeline
+	D3D12_PIPELINE_STATE_STREAM_DESC render_cube_stream_desc = {
+		sizeof(spherical_to_cube_pipeline_stream), &spherical_to_cube_pipeline_stream
+    };
+	ComPtr<ID3D12PipelineState> spherical_to_cube_pipeline_state;
+	HR_CHECK(device2->CreatePipelineState(&render_cube_stream_desc, IID_PPV_ARGS(&spherical_to_cube_pipeline_state)));
+
+	//Skybox pipeline
+	D3D12_PIPELINE_STATE_STREAM_DESC skybox_stream_desc = {
+		sizeof(skybox_pipeline_stream), &skybox_pipeline_stream
+    };
+	ComPtr<ID3D12PipelineState> skybox_pipeline_state;
+	HR_CHECK(device2->CreatePipelineState(&skybox_stream_desc, IID_PPV_ARGS(&skybox_pipeline_state)));
 
 	D3D12MA::ALLOCATION_DESC cube_cbuffer_alloc_desc = {};
 	cube_cbuffer_alloc_desc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
@@ -917,11 +979,11 @@ int main()
 	cube_cbuffer_data.proj = XMMatrixIdentity();
 	memcpy(cube_cbuffer_address, &cube_cbuffer_data, sizeof(cube_cbuffer_data));
 
-	HR_CHECK(command_list->Reset(command_allocators[frame_index].Get(), render_cubemap_pipeline_state.Get()));
+	HR_CHECK(command_list->Reset(command_allocators[frame_index].Get(), spherical_to_cube_pipeline_state.Get()));
 
 	auto cubemap_rt_barrier = CD3DX12_RESOURCE_BARRIER::Transition(cubemap_texture.texture_resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
 	command_list->ResourceBarrier(1, &cubemap_rt_barrier);
-	command_list->OMSetRenderTargets(cubemap_texture.rtv_handles.size(), cubemap_texture.rtv_handles.data(), FALSE, nullptr);
+	command_list->OMSetRenderTargets(static_cast<UINT>(cubemap_texture.rtv_handles.size()), cubemap_texture.rtv_handles.data(), FALSE, nullptr);
 
 	command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
@@ -1113,6 +1175,8 @@ int main()
 	clock_t time = clock();
 	double accumulated_delta_time = 0.0f;
 	size_t frames_rendered = 0;
+
+	POINT last_mouse_pos = {};
 	
 	bool should_close = false;
 	
@@ -1126,6 +1190,15 @@ int main()
 
 		accumulated_delta_time += delta_time;
 		frames_rendered++;
+
+		//Mouse Delta
+		POINT mouse_pos;
+		GetCursorPos(&mouse_pos);
+		const float mouse_delta_x = static_cast<float>(mouse_pos.x - last_mouse_pos.x) / width;
+		const float mouse_delta_y = static_cast<float>(mouse_pos.y - last_mouse_pos.y) / height;
+		last_mouse_pos = mouse_pos;
+
+		printf("MouseDelta: [%f,%f]\n", mouse_delta_x, mouse_delta_y);
 		
 		// Process any messages in the queue.
 		MSG msg = {};
@@ -1154,6 +1227,17 @@ int main()
 				if (is_key_down('Q')) { cam_pos -= cam_up	   * translation_speed; }
 
 				//FCS TODO: Cam Rotation Control
+				if (is_key_down(VK_RBUTTON))
+				{
+					const float rot_rate = 90.0f * delta_time;
+
+					//TODO: compute real pitch + yaw axes from orientation
+					auto pitch_rot = XMMatrixRotationAxis( cam_right, rot_rate * mouse_delta_y);
+					auto yaw_rot = XMMatrixRotationAxis( cam_up, rot_rate * mouse_delta_x);
+					auto total_rot = XMMatrixMultiply(pitch_rot, yaw_rot);
+					
+					cam_forward = XMVector3Transform(cam_forward, total_rot);
+				}
 			}
 
 			XMVECTOR target = cam_pos + cam_forward;
@@ -1161,7 +1245,7 @@ int main()
 
 			float fov_y = 45.0f;// * XM_PI / 180.0f;
 			float aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
-			scene_constant_buffer_data.proj = XMMatrixPerspectiveFovLH(fov_y, aspect_ratio, 0.01f, 1000.0f);
+			scene_constant_buffer_data.proj = XMMatrixPerspectiveFovLH(fov_y, aspect_ratio, 0.01f, 100000.0f);
 			
 			scene_constant_buffer_data.cam_pos = cam_pos;
 			memcpy(cbv_gpu_addresses[frame_index], &scene_constant_buffer_data, sizeof(scene_constant_buffer_data));
@@ -1215,6 +1299,22 @@ int main()
 				command_list->IASetVertexBuffers(0, 1, &mesh.vertex_buffer_view);
 				command_list->IASetIndexBuffer(&mesh.index_buffer_view);
 				command_list->DrawIndexedInstanced(mesh.index_count(), 100, 0, 0, 0);
+			}
+
+			//Render Skybox
+			{
+				//Set Pipeline State
+				command_list->SetPipelineState(skybox_pipeline_state.Get());
+				
+				ID3D12DescriptorHeap* skybox_descriptor_heaps[] = { cubemap_texture.cubemap_descriptor_heap_srv.Get() };
+				command_list->SetDescriptorHeaps(_countof(skybox_descriptor_heaps), skybox_descriptor_heaps);
+
+				//Slot 1: skybox (cubemap) texture
+				command_list->SetGraphicsRootDescriptorTable(1, cubemap_texture.cubemap_descriptor_heap_srv->GetGPUDescriptorHandleForHeapStart());
+
+				command_list->IASetVertexBuffers(0, 1, &cube.vertex_buffer_view);
+				command_list->IASetIndexBuffer(&cube.index_buffer_view);
+				command_list->DrawIndexedInstanced(cube.index_count(), 1, 0, 0, 0);
 			}
 			
 			// Indicate that the back buffer will now be used to present.

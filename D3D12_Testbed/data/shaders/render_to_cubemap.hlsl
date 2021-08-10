@@ -112,12 +112,12 @@ PsOutput ps_main(const PsInput input) : SV_TARGET
 
     float3 sample_dir = normalize(input.world_pos);
 
-    output.front  = sample_spherical_map(sample_dir);
-    output.back   = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 180));
-    output.left   = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), -90));
-    output.right  = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 90));
-    output.top    = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(1,0,0), 90));
-    output.bottom = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(1,0,0), -90));
+    output.front   = sample_spherical_map(sample_dir);
+    output.back    = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 180));
+    output.left    = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(1,0,0), 90));
+    output.right   = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(1,0,0), -90));
+    output.top     = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), -90));
+    output.bottom  = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 90));
 
     return output;
 }
