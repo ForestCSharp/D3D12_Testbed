@@ -34,11 +34,6 @@
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="data\shaders\shaders.hlsl">
-      <Filter>Assets\Shaders</Filter>
-    </CustomBuild>
-  </ItemGroup>
-  <ItemGroup>
     <ClInclude Include="src\D3D12MemAlloc\D3D12MemAlloc.h">
       <Filter>Header Files</Filter>
     </ClInclude>
