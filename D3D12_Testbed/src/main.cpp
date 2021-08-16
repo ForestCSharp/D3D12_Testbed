@@ -44,13 +44,6 @@ struct GpuVertex
 	// XMFLOAT2 uv; //TODO:
 };
 
-const std::vector<D3D12_INPUT_ELEMENT_DESC> input_element_descs =
-{
-	{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-	{ "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-	{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
-};
-
 static const UINT backbuffer_count = 3;
 
 bool is_key_down(const int in_key)
@@ -72,15 +65,18 @@ int main()
 	window_class.lpszClassName = L"DXSampleClass";
 	RegisterClassEx(&window_class);
 
-	LONG width = 1280;
-	LONG height = 720;
+	const bool borderless_fullscreen = false;
+	
+	auto window_style = borderless_fullscreen ? WS_POPUP : WS_OVERLAPPEDWINDOW;
+	LONG width  = borderless_fullscreen ? GetSystemMetrics(SM_CXSCREEN) : 1280;
+	LONG height = borderless_fullscreen ? GetSystemMetrics(SM_CYSCREEN) : 720;
 	RECT window_rect = { 0, 0, width, height};
 	AdjustWindowRect(&window_rect, WS_OVERLAPPEDWINDOW, FALSE);
 
 	HWND window = CreateWindow(
 		window_class.lpszClassName,
 		L"D3D12 Testbed",
-		WS_OVERLAPPEDWINDOW,
+		window_style,
 		CW_USEDEFAULT,
 		CW_USEDEFAULT,
 		window_rect.right - window_rect.left,
@@ -258,7 +254,6 @@ int main()
 		}
 	}
 
-
 	// 8. Create our (empty) root signature, which describes resources to be used when running work on the GPU
 	ComPtr<ID3D12RootSignature> root_signature;
 	{
@@ -286,29 +281,21 @@ int main()
 	}
 
 	// 9. Compile our vertex and pixel shaders
-	ComPtr<ID3DBlob> vertex_shader = compile_shader(L"data/shaders/pbr.hlsl", "vs_main", "vs_5_0");
-	ComPtr<ID3DBlob> pixel_shader  = compile_shader(L"data/shaders/pbr.hlsl", "ps_main", "ps_5_0");
-
 	ComPtr<ID3D12PipelineState> pipeline_state = GraphicsPipelineBuilder()
 		.with_root_signature(root_signature)
-		.with_vs(vertex_shader)
-		.with_ps(pixel_shader)
+		.with_vs(compile_shader(L"data/shaders/pbr.hlsl", "vs_main", "vs_5_0"))
+		.with_ps(compile_shader(L"data/shaders/pbr.hlsl", "ps_main", "ps_5_0"))
 		.with_depth_enabled(true)
-		.with_input_layout(input_element_descs)
 		.with_dsv_format(DXGI_FORMAT_D32_FLOAT)
 		.with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
 		.with_rtv_formats({DXGI_FORMAT_R8G8B8A8_UNORM_SRGB})
 		.build(device);
 
-	ComPtr<ID3DBlob> skybox_vs = compile_shader(L"data/shaders/skybox.hlsl", "vs_main", "vs_5_0");
-	ComPtr<ID3DBlob> skybox_ps = compile_shader(L"data/shaders/skybox.hlsl", "ps_main", "ps_5_0");
-
 	ComPtr<ID3D12PipelineState> skybox_pipeline_state = GraphicsPipelineBuilder()
         .with_root_signature(root_signature)
-        .with_vs(skybox_vs)
-        .with_ps(skybox_ps)
+        .with_vs(compile_shader(L"data/shaders/skybox.hlsl", "vs_main", "vs_5_0"))
+        .with_ps(compile_shader(L"data/shaders/skybox.hlsl", "ps_main", "ps_5_0"))
         .with_depth_enabled(true)
-        .with_input_layout(input_element_descs)
         .with_dsv_format(DXGI_FORMAT_D32_FLOAT)
         .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
         .with_rtv_formats({DXGI_FORMAT_R8G8B8A8_UNORM_SRGB})
@@ -385,18 +372,14 @@ int main()
 		HR_CHECK(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(&cubemap_root_signature)));
 	}
 
-	ComPtr<ID3DBlob> spherical_to_cube_vs = compile_shader(L"data/shaders/render_to_cubemap.hlsl", "vs_main", "vs_5_0");
-	ComPtr<ID3DBlob> spherical_to_cube_ps = compile_shader(L"data/shaders/render_to_cubemap.hlsl", "ps_main", "ps_5_0");
-
 	std::vector<DXGI_FORMAT> sphere_to_cube_rtv_formats = { cubemap_format, cubemap_format, cubemap_format,
 													        cubemap_format, cubemap_format, cubemap_format };
 
 	ComPtr<ID3D12PipelineState> spherical_to_cube_pipeline_state = GraphicsPipelineBuilder()
         .with_root_signature(cubemap_root_signature)
-        .with_vs(spherical_to_cube_vs)
-        .with_ps(spherical_to_cube_ps)
+        .with_vs(compile_shader(L"data/shaders/render_to_cubemap.hlsl", "vs_main", "vs_5_0"))
+        .with_ps(compile_shader(L"data/shaders/render_to_cubemap.hlsl", "ps_main", "ps_5_0"))
         .with_depth_enabled(false)
-        .with_input_layout(input_element_descs)
         .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
         .with_rtv_formats(sphere_to_cube_rtv_formats)
         .build(device);

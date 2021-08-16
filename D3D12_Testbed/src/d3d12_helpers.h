@@ -459,16 +459,12 @@ struct TextureResource
 	}
 };
 
-namespace REMOVE_ME
-{
-	D3D12_RASTERIZER_DESC RasterizerState; //TODO: "with" functions
-	D3D12_DEPTH_STENCIL_DESC DepthStencilState; //TODO: more "with" functions
-}
-
 struct GraphicsPipelineBuilder
 {
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC pso_desc;
 
+	ComPtr<ID3DBlob> vs_bytecode;
+	ComPtr<ID3DBlob> ps_bytecode;
 	std::vector<D3D12_INPUT_ELEMENT_DESC> input_element_descs;
 
 	GraphicsPipelineBuilder()
@@ -525,13 +521,15 @@ struct GraphicsPipelineBuilder
 
 	GraphicsPipelineBuilder& with_vs(const ComPtr<ID3DBlob> in_shader_bytecode)
 	{
-		pso_desc.VS = CD3DX12_SHADER_BYTECODE(in_shader_bytecode.Get());
+		vs_bytecode = in_shader_bytecode;
+		pso_desc.VS = CD3DX12_SHADER_BYTECODE(vs_bytecode.Get());
 		return *this;
 	}
 
 	GraphicsPipelineBuilder& with_ps(const ComPtr<ID3DBlob> in_shader_bytecode)
 	{
-		pso_desc.PS = CD3DX12_SHADER_BYTECODE(in_shader_bytecode.Get());
+		ps_bytecode = in_shader_bytecode;
+		pso_desc.PS = CD3DX12_SHADER_BYTECODE(ps_bytecode.Get());
 		return *this;
 	}
 
@@ -566,13 +564,13 @@ struct GraphicsPipelineBuilder
 		return *this;
 	}
 
-	GraphicsPipelineBuilder& with_input_layout(const std::vector<D3D12_INPUT_ELEMENT_DESC> in_element_descs)
-	{
-		input_element_descs = in_element_descs;
-		pso_desc.InputLayout.NumElements = input_element_descs.size();
-		pso_desc.InputLayout.pInputElementDescs = input_element_descs.data();
-		return *this;
-	}
+	// GraphicsPipelineBuilder& with_input_layout(const std::vector<D3D12_INPUT_ELEMENT_DESC> in_element_descs)
+	// {
+	// 	input_element_descs = in_element_descs;
+	// 	pso_desc.InputLayout.NumElements = input_element_descs.size();
+	// 	pso_desc.InputLayout.pInputElementDescs = input_element_descs.data();
+	// 	return *this;
+	// }
 
 	//TODO: More rasterizer setters
 
@@ -582,8 +580,73 @@ struct GraphicsPipelineBuilder
 		return *this;
 	}
 
-	ComPtr<ID3D12PipelineState> build(ComPtr<ID3D12Device> device) const
+	static DXGI_FORMAT get_format_from_parameter_reflection(const D3D12_SIGNATURE_PARAMETER_DESC& in_reflection)
 	{
+		if (in_reflection.Mask == 1)
+		{
+			if (in_reflection.ComponentType == D3D_REGISTER_COMPONENT_UINT32)  { return DXGI_FORMAT_R32_UINT;  }
+			if (in_reflection.ComponentType == D3D_REGISTER_COMPONENT_SINT32)  { return DXGI_FORMAT_R32_SINT;  }
+			if (in_reflection.ComponentType == D3D_REGISTER_COMPONENT_FLOAT32) { return DXGI_FORMAT_R32_FLOAT; }
+		}
+		else if (in_reflection.Mask <= 3)
+		{
+			if (in_reflection.ComponentType == D3D_REGISTER_COMPONENT_UINT32)  { return DXGI_FORMAT_R32G32_UINT;  }
+			if (in_reflection.ComponentType == D3D_REGISTER_COMPONENT_SINT32)  { return DXGI_FORMAT_R32G32_SINT;  }
+			if (in_reflection.ComponentType == D3D_REGISTER_COMPONENT_FLOAT32) { return DXGI_FORMAT_R32G32_FLOAT; }
+		}
+		else if (in_reflection.Mask <= 7)
+		{
+			if (in_reflection.ComponentType == D3D_REGISTER_COMPONENT_UINT32)  { return DXGI_FORMAT_R32G32B32_UINT;  }
+			if (in_reflection.ComponentType == D3D_REGISTER_COMPONENT_SINT32)  { return DXGI_FORMAT_R32G32B32_SINT;  }
+			if (in_reflection.ComponentType == D3D_REGISTER_COMPONENT_FLOAT32) { return DXGI_FORMAT_R32G32B32_FLOAT; }
+		}
+		else if (in_reflection.Mask <= 15)
+		{
+			if (in_reflection.ComponentType == D3D_REGISTER_COMPONENT_UINT32)  { return DXGI_FORMAT_R32G32B32A32_UINT;  }
+			if (in_reflection.ComponentType == D3D_REGISTER_COMPONENT_SINT32)  { return DXGI_FORMAT_R32G32B32A32_SINT;  }
+			if (in_reflection.ComponentType == D3D_REGISTER_COMPONENT_FLOAT32) { return DXGI_FORMAT_R32G32B32A32_FLOAT; }
+		}
+
+		return DXGI_FORMAT_UNKNOWN;
+	}
+
+	ComPtr<ID3D12PipelineState> build(ComPtr<ID3D12Device> device)
+	{
+		assert(pso_desc.pRootSignature != nullptr);
+		assert(pso_desc.VS.pShaderBytecode != nullptr);
+		assert(pso_desc.PS.pShaderBytecode != nullptr);
+		
+		ID3D12ShaderReflection* vertex_shader_reflection = nullptr;
+		HR_CHECK(D3DReflect(vs_bytecode->GetBufferPointer(), vs_bytecode->GetBufferSize(), IID_PPV_ARGS(&vertex_shader_reflection)));
+
+		D3D12_SHADER_DESC vertex_shader_desc;
+		HR_CHECK(vertex_shader_reflection->GetDesc(&vertex_shader_desc));
+
+		//Set InputLayout from vertex-shader inputs
+		input_element_descs.clear();
+		input_element_descs.reserve(vertex_shader_desc.InputParameters);
+		for (UINT i = 0; i < vertex_shader_desc.InputParameters; ++i)
+		{
+			D3D12_SIGNATURE_PARAMETER_DESC input_element_reflection;
+			HR_CHECK(vertex_shader_reflection->GetInputParameterDesc(i, &input_element_reflection));
+
+			D3D12_INPUT_ELEMENT_DESC input_element_desc = {};
+			input_element_desc.SemanticName = input_element_reflection.SemanticName;
+			input_element_desc.SemanticIndex = input_element_reflection.SemanticIndex;
+			input_element_desc.Format = get_format_from_parameter_reflection(input_element_reflection);
+			input_element_desc.InputSlot = 0; //TODO?
+			input_element_desc.AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
+			input_element_desc.InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+			input_element_desc.InstanceDataStepRate = 0;
+			input_element_descs.push_back(input_element_desc);
+		}
+
+		pso_desc.InputLayout.NumElements = input_element_descs.size();
+		pso_desc.InputLayout.pInputElementDescs = input_element_descs.data();
+
+		D3D12_SIGNATURE_PARAMETER_DESC input_parameter_desc;
+		HR_CHECK(vertex_shader_reflection->GetInputParameterDesc(0, &input_parameter_desc));
+	
 		ComPtr<ID3D12PipelineState> out_pipeline_state;
 		HR_CHECK(device->CreateGraphicsPipelineState(&pso_desc, IID_PPV_ARGS(&out_pipeline_state)));
 		return out_pipeline_state;
