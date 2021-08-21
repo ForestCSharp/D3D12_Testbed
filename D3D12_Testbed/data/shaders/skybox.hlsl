@@ -16,10 +16,17 @@ cbuffer SceneConstantBuffer : register(b0)
     float4 cam_pos;
 };
 
-//Testing Equirectangular Sampling
-TextureCube       cubemap_texture : register(t0);
-SamplerState      cubemap_sampler : register(s0);
+//#define myTex2DSpace space1
+#define myTexCubeSpace space2
 
+#define BINDLESS_TABLE_SIZE 10000 //TODO Sync up with C++
+
+//Texture2D Texture2DTable[BINDLESS_TABLE_SIZE]  : register(t0, myTex2DSpace);
+TextureCube TextureCubeTable[BINDLESS_TABLE_SIZE]  : register(t0, myTexCubeSpace);
+
+//Testing Equirectangular Sampling
+//TextureCube       cubemap_texture : register(t0);
+SamplerState      cubemap_sampler : register(s0);
 
 static matrix identity =
 {
@@ -46,7 +53,7 @@ struct PsInput
     float3 world_pos : POSITION;
 };
 
-PsInput vs_main(const float3 position : POSITION, const float3 normal : NORMAL, const float4 color : COLOR)
+PsInput vs_main(const float3 position : POSITION, const float3 normal : NORMAL, const float4 color : COLOR, const float2 uv : TEXCOORD)
 {
     PsInput result;
     
@@ -68,7 +75,7 @@ PsInput vs_main(const float3 position : POSITION, const float3 normal : NORMAL, 
 float4 ps_main(const PsInput input) : SV_TARGET
 {
     const float3 dir = normalize(input.world_pos);    
-    float4 out_color = cubemap_texture.Sample(cubemap_sampler, dir);
+    float4 out_color = TextureCubeTable[0].Sample(cubemap_sampler, dir);
 
     return out_color;
 }

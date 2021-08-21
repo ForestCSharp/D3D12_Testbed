@@ -54,7 +54,7 @@ struct PsInput
     uint instance_id : SV_InstanceID;
 };
 
-PsInput vs_main(const float3 position : POSITION, const float3 normal : NORMAL, const float4 color : COLOR,  const uint instance_id : SV_InstanceID)
+PsInput vs_main(const float3 position : POSITION, const float3 normal : NORMAL, const float4 color : COLOR, const float2 uv : TEXCOORD, const uint instance_id : SV_InstanceID)
 {
     PsInput result;
     

@@ -27,7 +27,10 @@ using std::array;
 //D3D12 Helpers
 #include "D3D12MemAlloc/D3D12MemAlloc.h"
 #include "d3dx12.h"
+
+
 #include "d3d12_helpers.h"
+#include "d3d12_texture.h"
 
 struct SceneConstantBuffer
 {
@@ -41,7 +44,7 @@ struct GpuVertex
 	XMFLOAT3 position;
 	XMFLOAT3 normal;
 	XMFLOAT4 color;
-	// XMFLOAT2 uv; //TODO:
+	XMFLOAT2 uv;
 };
 
 static const UINT backbuffer_count = 3;
@@ -89,15 +92,15 @@ int main()
 	ShowWindow(window, SW_SHOW);
 
 	ComPtr<ID3D12Debug> debug_controller;
-	ComPtr<ID3D12Debug1> debug_controller_1;
 	if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug_controller))))
 	{
 		debug_controller->EnableDebugLayer();
 		
-		if (SUCCEEDED(debug_controller->QueryInterface(IID_PPV_ARGS(&debug_controller_1))))
-		{
-			debug_controller_1->SetEnableGPUBasedValidation(true);
-		}
+		//ComPtr<ID3D12Debug1> debug_controller_1;
+		//if (SUCCEEDED(debug_controller->QueryInterface(IID_PPV_ARGS(&debug_controller_1))))
+		//{
+		//	debug_controller_1->SetEnableGPUBasedValidation(true);
+		//}
 	}
 
 	// 2. Create a D3D12 Factory, Adapter, and Device
@@ -265,7 +268,16 @@ int main()
 		root_parameters[0].InitAsConstantBufferView(0,0,D3D12_ROOT_DESCRIPTOR_FLAG_NONE,D3D12_SHADER_VISIBILITY_ALL);
 
 		CD3DX12_DESCRIPTOR_RANGE1 range{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0 };
-		root_parameters[1].InitAsDescriptorTable (1, &range);
+		
+		// D3D12_DESCRIPTOR_RANGE1 range = {};
+		// range.BaseShaderRegister = 0;
+		// range.NumDescriptors = TEXTURE_2D_BINDLESS_TABLE_SIZE;
+		// range.OffsetInDescriptorsFromTableStart = 0;
+		// range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+		// range.RegisterSpace = TEXTURE_2D_REGISTER_SPACE;
+		// range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
+		
+		root_parameters[1].InitAsDescriptorTable(1, &range);
 		
 		std::array<CD3DX12_STATIC_SAMPLER_DESC,1> samplers;
 		samplers[0].Init(0, D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT);
@@ -283,23 +295,58 @@ int main()
 	// 9. Compile our vertex and pixel shaders
 	ComPtr<ID3D12PipelineState> pipeline_state = GraphicsPipelineBuilder()
 		.with_root_signature(root_signature)
-		.with_vs(compile_shader(L"data/shaders/pbr.hlsl", "vs_main", "vs_5_0"))
-		.with_ps(compile_shader(L"data/shaders/pbr.hlsl", "ps_main", "ps_5_0"))
+		.with_vs(compile_shader(L"data/shaders/pbr.hlsl", "vs_main", "vs_5_1"))
+		.with_ps(compile_shader(L"data/shaders/pbr.hlsl", "ps_main", "ps_5_1"))
 		.with_depth_enabled(true)
 		.with_dsv_format(DXGI_FORMAT_D32_FLOAT)
 		.with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
 		.with_rtv_formats({DXGI_FORMAT_R8G8B8A8_UNORM_SRGB})
+		.with_debug_name(L"pipeline_state")
 		.build(device);
 
+	//TODO: BEGIN TESTING BINDLESS TABLE
+	ComPtr<ID3D12RootSignature> bindless_root_signature;
+	{
+		std::array<CD3DX12_ROOT_PARAMETER1, 2> root_parameters;
+
+		// Constant Buffer View
+		root_parameters[0].InitAsConstantBufferView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_ALL);
+
+		// Bindless Texture Array (cubemap)
+		D3D12_DESCRIPTOR_RANGE1 range = {};
+		range.BaseShaderRegister = 0;
+		range.NumDescriptors = BINDLESS_TABLE_SIZE;
+		range.OffsetInDescriptorsFromTableStart = 0;
+		range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+		range.RegisterSpace = TEXTURE_CUBE_REGISTER_SPACE;
+		range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
+
+		root_parameters[1].InitAsDescriptorTable(1, &range);
+
+		std::array<CD3DX12_STATIC_SAMPLER_DESC, 1> samplers;
+		samplers[0].Init(0, D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT);
+
+		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_signature_desc;
+		root_signature_desc.Init_1_1(static_cast<UINT>(root_parameters.size()), root_parameters.data(),
+			static_cast<UINT>(samplers.size()), samplers.data(),
+			D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+		ComPtr<ID3DBlob> signature_blob, error_blob;
+		HR_CHECK(D3D12SerializeVersionedRootSignature(&root_signature_desc, &signature_blob, &error_blob));
+		HR_CHECK(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(&bindless_root_signature)));
+	}
+	//TODO: END TESTING BINDLESS TABLE
+
 	ComPtr<ID3D12PipelineState> skybox_pipeline_state = GraphicsPipelineBuilder()
-        .with_root_signature(root_signature)
-        .with_vs(compile_shader(L"data/shaders/skybox.hlsl", "vs_main", "vs_5_0"))
-        .with_ps(compile_shader(L"data/shaders/skybox.hlsl", "ps_main", "ps_5_0"))
+        .with_root_signature(bindless_root_signature)
+        .with_vs(compile_shader(L"data/shaders/skybox.hlsl", "vs_main", "vs_5_1"))
+        .with_ps(compile_shader(L"data/shaders/skybox.hlsl", "ps_main", "ps_5_1"))
         .with_depth_enabled(true)
         .with_dsv_format(DXGI_FORMAT_D32_FLOAT)
         .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
         .with_rtv_formats({DXGI_FORMAT_R8G8B8A8_UNORM_SRGB})
 		.with_cull_mode(D3D12_CULL_MODE_NONE)
+		.with_debug_name(L"skybox_pipeline_state")
         .build(device);
 
 	// 12. Create Command list using command allocator and pipeline state, and close it (we'll record it later)
@@ -321,6 +368,21 @@ int main()
 	TextureResource cubemap_texture(device, gpu_memory_allocator, cubemap_format, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, cube_size, cube_size, 6);
 	cubemap_texture.set_name(TEXT("Cubemap Texture"));
 	cubemap_texture.create_cubemap_srv(device);
+
+	BindlessTextureManager texture_manager(device, gpu_memory_allocator);
+	texture_manager.register_texture(cubemap_texture);
+
+	texture_manager.register_texture(ibl_diffuse_texture);
+	texture_manager.register_texture(hdr_texture);
+
+	texture_manager.unregister_texture(ibl_diffuse_texture);
+	texture_manager.unregister_texture(hdr_texture);
+
+	texture_manager.register_texture(hdr_texture);
+	texture_manager.register_texture(ibl_diffuse_texture);
+
+	//exit(0);
+	
 
 	//Setup cube
 	//Note: We render all faces at once, so we really only need one "Face" to rasterize (4 verts, 6 indices)
@@ -357,6 +419,16 @@ int main()
 		root_parameters[0].InitAsConstantBufferView(0,0,D3D12_ROOT_DESCRIPTOR_FLAG_NONE,D3D12_SHADER_VISIBILITY_ALL);
 
 		CD3DX12_DESCRIPTOR_RANGE1 range{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0 };
+
+		// TODO: Cubemap table
+		// D3D12_DESCRIPTOR_RANGE1 range = {};
+		// range.BaseShaderRegister = 0;
+		// range.NumDescriptors = TEXTURE_2D_BINDLESS_TABLE_SIZE;
+		// range.OffsetInDescriptorsFromTableStart = 0;
+		// range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+		// range.RegisterSpace = TEXTURE_2D_REGISTER_SPACE;
+		// range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
+		
 		root_parameters[1].InitAsDescriptorTable(1, &range);
 		
 		std::array<CD3DX12_STATIC_SAMPLER_DESC,1> samplers;
@@ -377,11 +449,12 @@ int main()
 
 	ComPtr<ID3D12PipelineState> spherical_to_cube_pipeline_state = GraphicsPipelineBuilder()
         .with_root_signature(cubemap_root_signature)
-        .with_vs(compile_shader(L"data/shaders/render_to_cubemap.hlsl", "vs_main", "vs_5_0"))
-        .with_ps(compile_shader(L"data/shaders/render_to_cubemap.hlsl", "ps_main", "ps_5_0"))
+        .with_vs(compile_shader(L"data/shaders/render_to_cubemap.hlsl", "vs_main", "vs_5_1"))
+        .with_ps(compile_shader(L"data/shaders/render_to_cubemap.hlsl", "ps_main", "ps_5_1"))
         .with_depth_enabled(false)
         .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
         .with_rtv_formats(sphere_to_cube_rtv_formats)
+		.with_debug_name(L"spherical_to_cube_pipeline_state")
         .build(device);
 
 	D3D12MA::ALLOCATION_DESC cube_cbuffer_alloc_desc = {};
@@ -510,7 +583,7 @@ int main()
 			memcpy(&vertex.position, positions_buffer, positions_byte_stride);
 			memcpy(&vertex.normal, normals_buffer, normals_byte_stride);
 			vertex.color = XMFLOAT4(0.2f, 0.2f, 0.2f, 1.0f);
-			// memcpy(&vertex.uv, uvs_buffer, uvs_byte_stride); //TODO:
+			memcpy(&vertex.uv, uvs_buffer, uvs_byte_stride);
 		
 			positions_buffer += positions_byte_stride;
 			normals_buffer += normals_byte_stride;
@@ -749,12 +822,15 @@ int main()
 			{
 				//Set Pipeline State
 				command_list->SetPipelineState(skybox_pipeline_state.Get());
-				
-				ID3D12DescriptorHeap* skybox_descriptor_heaps[] = { cubemap_texture.cubemap_descriptor_heap_srv.Get() };
-				command_list->SetDescriptorHeaps(_countof(skybox_descriptor_heaps), skybox_descriptor_heaps);
+				command_list->SetGraphicsRootSignature(bindless_root_signature.Get());
 
-				//Slot 1: skybox (cubemap) texture
-				command_list->SetGraphicsRootDescriptorTable(1, cubemap_texture.cubemap_descriptor_heap_srv->GetGPUDescriptorHandleForHeapStart());
+				ID3D12DescriptorHeap* bindless_heaps[] = { texture_manager.bindless_cubemap_descriptor_heap.Get() };
+				command_list->SetDescriptorHeaps(_countof(bindless_heaps), bindless_heaps);
+
+				//0: Cbuffer
+				command_list->SetGraphicsRootConstantBufferView(0, constant_buffers[frame_index]->GetGPUVirtualAddress());
+				//1: Bindless array
+				command_list->SetGraphicsRootDescriptorTable(1, texture_manager.bindless_cubemap_descriptor_heap->GetGPUDescriptorHandleForHeapStart());
 
 				command_list->IASetVertexBuffers(0, 1, &cube.vertex_buffer_view);
 				command_list->IASetIndexBuffer(&cube.index_buffer_view);
@@ -803,6 +879,8 @@ int main()
 
 	
 	{ //Free all memory allocated with D3D12 Memory Allocator
+		texture_manager.release();
+
 		ibl_diffuse_texture.release();
 		hdr_texture.release();
 		cubemap_texture.release();
