@@ -316,16 +316,16 @@ struct TextureResource
 	}
 };
 
-#define BINDLESS_TABLE_SIZE 10000
-#define TEXTURE_2D_REGISTER_SPACE 1
-#define TEXTURE_CUBE_REGISTER_SPACE 2
+constexpr UINT BINDLESS_TABLE_SIZE		   = 10000;
+constexpr UINT BINDLESS_DESC_TYPES		   = 2;
+constexpr UINT TEXTURE_2D_REGISTER_SPACE   = 1;
+constexpr UINT TEXTURE_CUBE_REGISTER_SPACE = 2;
 
 struct BindlessTextureManager
 {
 	ComPtr<ID3D12Device> device;
 
-	ComPtr<ID3D12DescriptorHeap> bindless_texture_descriptor_heap;
-	ComPtr<ID3D12DescriptorHeap> bindless_cubemap_descriptor_heap;
+	ComPtr<ID3D12DescriptorHeap> bindless_descriptor_heap;
 
 	TextureResource invalid_texture;
 	TextureResource invalid_cubemap;
@@ -350,13 +350,11 @@ struct BindlessTextureManager
 		invalid_texture.set_name(TEXT("Invalid Texture"));
 
 		D3D12_DESCRIPTOR_HEAP_DESC bindless_heap_desc = {};
-		bindless_heap_desc.NumDescriptors = BINDLESS_TABLE_SIZE;
+		bindless_heap_desc.NumDescriptors = BINDLESS_TABLE_SIZE * BINDLESS_DESC_TYPES;
 		bindless_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 		bindless_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-		HR_CHECK(device->CreateDescriptorHeap(&bindless_heap_desc, IID_PPV_ARGS(&bindless_texture_descriptor_heap)));
-		bindless_texture_descriptor_heap->SetName(TEXT("bindless_texture_descriptor_heap"));
-		HR_CHECK(device->CreateDescriptorHeap(&bindless_heap_desc, IID_PPV_ARGS(&bindless_cubemap_descriptor_heap)));
-		bindless_texture_descriptor_heap->SetName(TEXT("bindless_texture_descriptor_heap"));
+		HR_CHECK(device->CreateDescriptorHeap(&bindless_heap_desc, IID_PPV_ARGS(&bindless_descriptor_heap)));
+		bindless_descriptor_heap->SetName(TEXT("bindless_descriptor_heap"));
 
 		//Init unfilled slots with dummy resource so we don't index into invalid data
 		for (UINT index = 0; index < BINDLESS_TABLE_SIZE; ++index)
@@ -364,9 +362,6 @@ struct BindlessTextureManager
 			create_srv_at_index(invalid_texture, index);
 			create_srv_at_index(invalid_cubemap, index);
 		}
-
-		//TODO: Only bind the above descriptor heap once
-		//TODO: Cubemaps
 	}
 
 	void release()
@@ -402,17 +397,20 @@ struct BindlessTextureManager
 			srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
 		}
 
-		const UINT heap_offset = index * cbv_srv_uav_heap_offset;
+		if (is_cubemap)
+		{
+			index += BINDLESS_TABLE_SIZE;
+		}
+		UINT heap_offset = index * cbv_srv_uav_heap_offset;
 
-		D3D12_CPU_DESCRIPTOR_HANDLE descriptor_handle = is_cubemap ? bindless_cubemap_descriptor_heap->GetCPUDescriptorHandleForHeapStart()
-																   : bindless_texture_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
+		D3D12_CPU_DESCRIPTOR_HANDLE descriptor_handle = bindless_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
 		descriptor_handle.ptr += heap_offset;
 		device->CreateShaderResourceView(in_texture_resource.texture_resource.Get(), &srv_desc, descriptor_handle);
 
 		in_texture_resource.bindless_index = index;
 	}
 
-	void register_texture(TextureResource& in_texture_resource) //TODO: Get cubemap info from texture resource
+	void register_texture(TextureResource& in_texture_resource)
 	{
 		bool is_cubemap = in_texture_resource.is_cubemap;
 
@@ -480,5 +478,18 @@ struct BindlessTextureManager
 			TextureResource& invalid_resource = is_cubemap ? invalid_cubemap : invalid_texture;
 			create_srv_at_index(invalid_resource, index);
 		}
+	}
+
+	D3D12_GPU_DESCRIPTOR_HANDLE get_texture_handle() const
+	{
+		return bindless_descriptor_heap->GetGPUDescriptorHandleForHeapStart();
+	}
+
+	D3D12_GPU_DESCRIPTOR_HANDLE get_cubemap_handle() const
+	{
+		D3D12_GPU_DESCRIPTOR_HANDLE out_handle = bindless_descriptor_heap->GetGPUDescriptorHandleForHeapStart();
+		UINT cubemap_offset = BINDLESS_TABLE_SIZE * cbv_srv_uav_heap_offset;
+		out_handle.ptr += cubemap_offset;
+		return out_handle;
 	}
 };

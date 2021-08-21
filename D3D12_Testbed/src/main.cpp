@@ -91,16 +91,20 @@ int main()
 
 	ShowWindow(window, SW_SHOW);
 
-	ComPtr<ID3D12Debug> debug_controller;
-	if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug_controller))))
+
+	if (IsDebuggerPresent())
 	{
-		debug_controller->EnableDebugLayer();
-		
-		//ComPtr<ID3D12Debug1> debug_controller_1;
-		//if (SUCCEEDED(debug_controller->QueryInterface(IID_PPV_ARGS(&debug_controller_1))))
-		//{
-		//	debug_controller_1->SetEnableGPUBasedValidation(true);
-		//}
+		ComPtr<ID3D12Debug> debug_controller;
+		if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug_controller))))
+		{
+			debug_controller->EnableDebugLayer();
+
+			//ComPtr<ID3D12Debug1> debug_controller_1;
+			//if (SUCCEEDED(debug_controller->QueryInterface(IID_PPV_ARGS(&debug_controller_1))))
+			//{
+			//	debug_controller_1->SetEnableGPUBasedValidation(true);
+			//}
+		}
 	}
 
 	// 2. Create a D3D12 Factory, Adapter, and Device
@@ -269,14 +273,6 @@ int main()
 
 		CD3DX12_DESCRIPTOR_RANGE1 range{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0 };
 		
-		// D3D12_DESCRIPTOR_RANGE1 range = {};
-		// range.BaseShaderRegister = 0;
-		// range.NumDescriptors = TEXTURE_2D_BINDLESS_TABLE_SIZE;
-		// range.OffsetInDescriptorsFromTableStart = 0;
-		// range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-		// range.RegisterSpace = TEXTURE_2D_REGISTER_SPACE;
-		// range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
-		
 		root_parameters[1].InitAsDescriptorTable(1, &range);
 		
 		std::array<CD3DX12_STATIC_SAMPLER_DESC,1> samplers;
@@ -307,21 +303,30 @@ int main()
 	//TODO: BEGIN TESTING BINDLESS TABLE
 	ComPtr<ID3D12RootSignature> bindless_root_signature;
 	{
-		std::array<CD3DX12_ROOT_PARAMETER1, 2> root_parameters;
+		std::array<CD3DX12_ROOT_PARAMETER1, 3> root_parameters;
 
 		// Constant Buffer View
 		root_parameters[0].InitAsConstantBufferView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_ALL);
 
-		// Bindless Texture Array (cubemap)
-		D3D12_DESCRIPTOR_RANGE1 range = {};
-		range.BaseShaderRegister = 0;
-		range.NumDescriptors = BINDLESS_TABLE_SIZE;
-		range.OffsetInDescriptorsFromTableStart = 0;
-		range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-		range.RegisterSpace = TEXTURE_CUBE_REGISTER_SPACE;
-		range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
+		// Bindless resources (texture2Ds)
+		D3D12_DESCRIPTOR_RANGE1 texture_range = {};
+		texture_range.BaseShaderRegister = 0;
+		texture_range.NumDescriptors = BINDLESS_TABLE_SIZE;
+		texture_range.OffsetInDescriptorsFromTableStart = 0;
+		texture_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+		texture_range.RegisterSpace = TEXTURE_2D_REGISTER_SPACE;
+		texture_range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
+		root_parameters[1].InitAsDescriptorTable(1, &texture_range);
 
-		root_parameters[1].InitAsDescriptorTable(1, &range);
+		// Bindless Resources (cubemaps)
+		D3D12_DESCRIPTOR_RANGE1 cube_range = {};
+		cube_range.BaseShaderRegister = 0;
+		cube_range.NumDescriptors = BINDLESS_TABLE_SIZE;
+		cube_range.OffsetInDescriptorsFromTableStart = 0;
+		cube_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+		cube_range.RegisterSpace = TEXTURE_CUBE_REGISTER_SPACE;
+		cube_range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
+		root_parameters[2].InitAsDescriptorTable(1, &cube_range);
 
 		std::array<CD3DX12_STATIC_SAMPLER_DESC, 1> samplers;
 		samplers[0].Init(0, D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT);
@@ -419,15 +424,6 @@ int main()
 		root_parameters[0].InitAsConstantBufferView(0,0,D3D12_ROOT_DESCRIPTOR_FLAG_NONE,D3D12_SHADER_VISIBILITY_ALL);
 
 		CD3DX12_DESCRIPTOR_RANGE1 range{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0 };
-
-		// TODO: Cubemap table
-		// D3D12_DESCRIPTOR_RANGE1 range = {};
-		// range.BaseShaderRegister = 0;
-		// range.NumDescriptors = TEXTURE_2D_BINDLESS_TABLE_SIZE;
-		// range.OffsetInDescriptorsFromTableStart = 0;
-		// range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-		// range.RegisterSpace = TEXTURE_2D_REGISTER_SPACE;
-		// range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
 		
 		root_parameters[1].InitAsDescriptorTable(1, &range);
 		
@@ -742,10 +738,10 @@ int main()
 				if (is_key_down('E')) { cam_pos += cam_up	   * translation_speed; }
 				if (is_key_down('Q')) { cam_pos -= cam_up	   * translation_speed; }
 
-				//FCS TODO: Cam Rotation Control
+				//Cam Rotation Control
 				if (is_key_down(VK_RBUTTON))
 				{
-					const float rot_rate = 90.0f * static_cast<float>(delta_time);
+					const float rot_rate = 4.0f;
 
 					//TODO: compute real pitch + yaw axes from orientation
 					auto pitch_rot = XMMatrixRotationAxis( cam_right, rot_rate * mouse_delta_y);
@@ -824,13 +820,18 @@ int main()
 				command_list->SetPipelineState(skybox_pipeline_state.Get());
 				command_list->SetGraphicsRootSignature(bindless_root_signature.Get());
 
-				ID3D12DescriptorHeap* bindless_heaps[] = { texture_manager.bindless_cubemap_descriptor_heap.Get() };
+				ID3D12DescriptorHeap* bindless_heaps[] = { texture_manager.bindless_descriptor_heap.Get()};
 				command_list->SetDescriptorHeaps(_countof(bindless_heaps), bindless_heaps);
 
 				//0: Cbuffer
 				command_list->SetGraphicsRootConstantBufferView(0, constant_buffers[frame_index]->GetGPUVirtualAddress());
-				//1: Bindless array
-				command_list->SetGraphicsRootDescriptorTable(1, texture_manager.bindless_cubemap_descriptor_heap->GetGPUDescriptorHandleForHeapStart());
+				//1: bindless texture table
+				command_list->SetGraphicsRootDescriptorTable(1, texture_manager.get_texture_handle());
+				//2. bindless cubemap table
+				command_list->SetGraphicsRootDescriptorTable(2, texture_manager.get_cubemap_handle());
+
+				//TODO: need to get correct location
+				//command_list->SetGraphicsRootDescriptorTable(2, texture_manager.bindless_cubemap_descriptor_heap->GetGPUDescriptorHandleForHeapStart());
 
 				command_list->IASetVertexBuffers(0, 1, &cube.vertex_buffer_view);
 				command_list->IASetIndexBuffer(&cube.index_buffer_view);
@@ -876,6 +877,8 @@ int main()
 	}
 
 	wait_gpu_idle(device, command_queue);
+
+	printf("FPS: %f", (double)frames_rendered / accumulated_delta_time);
 
 	
 	{ //Free all memory allocated with D3D12 Memory Allocator
