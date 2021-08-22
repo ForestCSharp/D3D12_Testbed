@@ -321,7 +321,7 @@ constexpr UINT BINDLESS_DESC_TYPES		   = 2;
 constexpr UINT TEXTURE_2D_REGISTER_SPACE   = 1;
 constexpr UINT TEXTURE_CUBE_REGISTER_SPACE = 2;
 
-struct BindlessTextureManager
+struct BindlessResourceManager
 {
 	ComPtr<ID3D12Device> device;
 
@@ -338,7 +338,7 @@ struct BindlessTextureManager
 
 	UINT cbv_srv_uav_heap_offset;
 
-	BindlessTextureManager(ComPtr<ID3D12Device> in_device, D3D12MA::Allocator* gpu_memory_allocator)
+	BindlessResourceManager(ComPtr<ID3D12Device> in_device, D3D12MA::Allocator* gpu_memory_allocator)
 		: device(in_device)
 		, invalid_texture(device, gpu_memory_allocator, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_RESOURCE_FLAG_NONE, 4, 4, 1) //TODO: Load some meaningful image to denote indexing errors
 		, invalid_cubemap(device, gpu_memory_allocator, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_RESOURCE_FLAG_NONE, 4, 4, 6) //TODO: Load some meaningful image to denote indexing errors
@@ -372,7 +372,7 @@ struct BindlessTextureManager
 		//TODO: Need to unset all textures bindless indices
 	}
 
-	void create_srv_at_index(TextureResource& in_texture_resource, size_t index)
+	void create_srv_at_index(TextureResource& in_texture_resource, size_t index) const
 	{
 		const bool is_cubemap = in_texture_resource.is_cubemap;
 

@@ -74,7 +74,7 @@ int main()
 	LONG width  = borderless_fullscreen ? GetSystemMetrics(SM_CXSCREEN) : 1280;
 	LONG height = borderless_fullscreen ? GetSystemMetrics(SM_CYSCREEN) : 720;
 	RECT window_rect = { 0, 0, width, height};
-	AdjustWindowRect(&window_rect, WS_OVERLAPPEDWINDOW, FALSE);
+	AdjustWindowRect(&window_rect, window_style, FALSE);
 
 	HWND window = CreateWindow(
 		window_class.lpszClassName,
@@ -84,8 +84,8 @@ int main()
 		CW_USEDEFAULT,
 		window_rect.right - window_rect.left,
 		window_rect.bottom - window_rect.top,
-		nullptr, // We have no parent window.
-		nullptr, // We aren't using menus.
+		nullptr, // no parent window
+		nullptr, // no menus
 		h_instance,
 		NULL); //Could pass userdata to window proc here
 
@@ -138,12 +138,6 @@ int main()
 
 	D3D12MA::Allocator* gpu_memory_allocator = nullptr;
 	HR_CHECK(D3D12MA::CreateAllocator(&allocator_desc, &gpu_memory_allocator));
-	
-	HANDLE fence_event;
-	ComPtr<ID3D12Fence> fence;
-
-	UINT64 fence_values[backbuffer_count];
-	memset(fence_values, 0, sizeof(UINT64) * backbuffer_count);
 
 	// 3. Create a command queue
 	ComPtr<ID3D12CommandQueue> command_queue;
@@ -152,114 +146,191 @@ int main()
 	queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
 	HR_CHECK(device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&command_queue)));
 
-	// 4. Create the swapchain and associate it with our window
-	DXGI_SWAP_CHAIN_DESC1 swap_chain_desc = {};
-	swap_chain_desc.BufferCount = backbuffer_count;
-	swap_chain_desc.Width = width;
-	swap_chain_desc.Height = height;
-	swap_chain_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-	swap_chain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-	swap_chain_desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-	swap_chain_desc.SampleDesc.Count = 1;
-
-	ComPtr<IDXGISwapChain1> swapchain_1;
-	HR_CHECK(factory->CreateSwapChainForHwnd(
-		command_queue.Get(), // Swap chain needs the queue so that it can force a flush on it.
-		window,
-		&swap_chain_desc,
-		nullptr,
-		nullptr,
-		&swapchain_1
-	));
-
 	HR_CHECK(factory->MakeWindowAssociation(window, 0));
+
+	array<ComPtr<ID3D12CommandAllocator>, backbuffer_count> command_allocators;
+	for (UINT current_frame_index = 0; current_frame_index < backbuffer_count; current_frame_index++)
+	{
+		// Create a command allocator per-frame, which will be used to create our command lists
+		HR_CHECK(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&command_allocators[current_frame_index])));
+	}
+
+	struct FrameResources
+	{
+		ComPtr<IDXGISwapChain3> swapchain;
+
+		ComPtr<ID3D12DescriptorHeap> rtv_descriptor_heap;
+		array<ComPtr<ID3D12Resource>, backbuffer_count> render_targets;
+		
+		ComPtr<ID3D12Resource> depth_texture;
+		D3D12MA::Allocation* depth_texture_allocation = nullptr;
+		ComPtr<ID3D12DescriptorHeap> depth_descriptor_heap;
+
+		//Synchronization
+		UINT frame_index = 0;
+		UINT64 fence_values[backbuffer_count];
+		ComPtr<ID3D12Fence> fence;
+		HANDLE fence_event = INVALID_HANDLE_VALUE;
+
+		//TODO: Need a struct to hold device, command_queue, factory, etc.
+		FrameResources(const LONG in_width, const LONG in_height, ComPtr<IDXGIFactory4> factory, ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const ComPtr<ID3D12CommandQueue> command_queue, const HWND window)
+		{
+			DXGI_SWAP_CHAIN_DESC1 swap_chain_desc = {};
+			swap_chain_desc.BufferCount = backbuffer_count;
+			swap_chain_desc.Width = in_width;
+			swap_chain_desc.Height = in_height;
+			swap_chain_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+			swap_chain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+			swap_chain_desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+			swap_chain_desc.SampleDesc.Count = 1;
+			swap_chain_desc.Flags = 0;
+
+			ComPtr<IDXGISwapChain1> swapchain_1;
+			HR_CHECK(factory->CreateSwapChainForHwnd(
+                command_queue.Get(), // Swap chain needs the queue so that it can force a flush on it.
+                window,
+                &swap_chain_desc,
+                nullptr,
+                nullptr,
+                &swapchain_1
+            ));
 	
-	ComPtr<IDXGISwapChain3> swapchain;
-	HR_CHECK(swapchain_1.As(&swapchain));
-	
-	UINT frame_index = swapchain->GetCurrentBackBufferIndex();
+			HR_CHECK(swapchain_1.As(&swapchain));
+
+			memset(fence_values, 0, sizeof(UINT64) * backbuffer_count);
+
+			HR_CHECK(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
+
+			fence_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+			if (fence_event == nullptr)
+			{
+				HR_CHECK(HRESULT_FROM_WIN32(GetLastError()));
+			}
+
+			resize(in_width, in_height, device, command_queue, gpu_memory_allocator);
+		}
+
+		void resize(const size_t in_width, const size_t in_height, ComPtr<ID3D12Device> device, ComPtr<ID3D12CommandQueue> command_queue, D3D12MA::Allocator* gpu_memory_allocator)
+		{
+			wait_gpu_idle(device, command_queue);
+
+			if (swapchain.Get() != nullptr)
+			{			
+				for (auto& render_target : render_targets)
+				{
+					render_target.Reset();
+				}
+
+				rtv_descriptor_heap.Reset();
+				
+				swapchain->ResizeBuffers(backbuffer_count, in_width, in_height, DXGI_FORMAT_R8G8B8A8_UNORM, 0);
+			}
+
+			D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {};
+			rtv_heap_desc.NumDescriptors = backbuffer_count;
+			rtv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+			rtv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+			HR_CHECK(device->CreateDescriptorHeap(&rtv_heap_desc, IID_PPV_ARGS(&rtv_descriptor_heap)));
+			rtv_descriptor_heap->SetName(TEXT("rtv_descriptor_heap"));
+			
+
+			D3D12_CPU_DESCRIPTOR_HANDLE rtv_descriptor_handle(rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart());
+
+			// Create a render target view for each frame.
+			for (UINT current_frame_index = 0; current_frame_index < backbuffer_count; current_frame_index++)
+			{
+				HR_CHECK(swapchain->GetBuffer(current_frame_index, IID_PPV_ARGS(&render_targets[current_frame_index])));
+
+				D3D12_RENDER_TARGET_VIEW_DESC render_target_view_desc = {};
+				render_target_view_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+				render_target_view_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+
+				device->CreateRenderTargetView(render_targets[current_frame_index].Get(), &render_target_view_desc, rtv_descriptor_handle);
+				UINT rtv_heap_offset = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+				rtv_descriptor_handle.ptr += rtv_heap_offset;
+			}
+
+			if (depth_texture_allocation != nullptr)
+			{
+				depth_texture_allocation->Release();
+			}
+
+			if (depth_texture.Get() != nullptr)
+			{
+				depth_texture.Reset();
+			}
+
+			D3D12MA::ALLOCATION_DESC depth_alloc_desc = {};
+			depth_alloc_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+			D3D12_RESOURCE_DESC depth_resource_desc = {};
+			depth_resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+			depth_resource_desc.Alignment = 0;
+			depth_resource_desc.Width = in_width;
+			depth_resource_desc.Height = in_height;
+			depth_resource_desc.DepthOrArraySize = 1;
+			depth_resource_desc.MipLevels = 1;
+			depth_resource_desc.Format = DXGI_FORMAT_D32_FLOAT;
+			depth_resource_desc.SampleDesc.Count = 1;
+			depth_resource_desc.SampleDesc.Quality = 0;
+			depth_resource_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+			depth_resource_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+			D3D12_CLEAR_VALUE depth_clear_value = {};
+			depth_clear_value.Format = DXGI_FORMAT_D32_FLOAT;
+			depth_clear_value.DepthStencil.Depth = 1.0f;
+			depth_clear_value.DepthStencil.Stencil = 0;
+
+			gpu_memory_allocator->CreateResource(
+	            &depth_alloc_desc,
+	            &depth_resource_desc,
+	            D3D12_RESOURCE_STATE_DEPTH_WRITE,
+	            &depth_clear_value,
+	            &depth_texture_allocation,
+	            IID_PPV_ARGS(&depth_texture)
+	        );
+
+			D3D12_DESCRIPTOR_HEAP_DESC depth_heap_desc = {};
+			depth_heap_desc.NumDescriptors = 1;
+			depth_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+			depth_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+			HR_CHECK(device->CreateDescriptorHeap(&depth_heap_desc, IID_PPV_ARGS(&depth_descriptor_heap)));
+			depth_descriptor_heap->SetName(TEXT("depth_descriptor_heap"));
+
+			D3D12_DEPTH_STENCIL_VIEW_DESC dsv_desc = {};
+			dsv_desc.Format = DXGI_FORMAT_D32_FLOAT;
+			dsv_desc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+			dsv_desc.Flags = D3D12_DSV_FLAG_NONE;
+
+			device->CreateDepthStencilView(depth_texture.Get(), &dsv_desc, depth_descriptor_heap->GetCPUDescriptorHandleForHeapStart());
+
+			frame_index = swapchain->GetCurrentBackBufferIndex();
+		}
+
+		void wait_for_previous_frame(ComPtr<ID3D12CommandQueue> command_queue)
+		{
+			const UINT64 current_fence_value = fence_values[frame_index];
+			HR_CHECK(command_queue->Signal(fence.Get(), current_fence_value));
+
+			frame_index = swapchain->GetCurrentBackBufferIndex();
+			// Wait until the previous frame is finished.
+			if (fence->GetCompletedValue() < fence_values[frame_index])
+			{
+				HR_CHECK(fence->SetEventOnCompletion(fence_values[frame_index], fence_event));
+				WaitForSingleObjectEx(fence_event, INFINITE, FALSE);
+			}
+
+			fence_values[frame_index] = current_fence_value + 1;
+		}
+	};
+
+	FrameResources frame_resources(width, height, factory, device, gpu_memory_allocator, command_queue, window);
 
 	// 5. Create descriptor heaps (1 per frame for CBV desc heaps)
-	D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {};
-	rtv_heap_desc.NumDescriptors = backbuffer_count;
-	rtv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-	rtv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-	ComPtr<ID3D12DescriptorHeap> rtv_descriptor_heap;
-	HR_CHECK(device->CreateDescriptorHeap(&rtv_heap_desc, IID_PPV_ARGS(&rtv_descriptor_heap)));
-	rtv_descriptor_heap->SetName(TEXT("rtv_descriptor_heap"));
 
 	UINT rtv_heap_offset = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
 	// Create Depth Buffer
-	D3D12_DESCRIPTOR_HEAP_DESC depth_heap_desc = {};
-	depth_heap_desc.NumDescriptors = 1;
-	depth_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-	depth_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
-	ComPtr<ID3D12DescriptorHeap> depth_descriptor_heap;
-	HR_CHECK(device->CreateDescriptorHeap(&depth_heap_desc, IID_PPV_ARGS(&depth_descriptor_heap)));
-	depth_descriptor_heap->SetName(TEXT("depth_descriptor_heap"));
-
-	D3D12MA::ALLOCATION_DESC depth_alloc_desc = {};
-	depth_alloc_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
-
-	D3D12_RESOURCE_DESC depth_resource_desc = {};
-	depth_resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-	depth_resource_desc.Alignment = 0;
-	depth_resource_desc.Width = width;
-	depth_resource_desc.Height = height;
-	depth_resource_desc.DepthOrArraySize = 1;
-	depth_resource_desc.MipLevels = 1;
-	depth_resource_desc.Format = DXGI_FORMAT_D32_FLOAT;
-	depth_resource_desc.SampleDesc.Count = 1;
-	depth_resource_desc.SampleDesc.Quality = 0;
-	depth_resource_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-	depth_resource_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
-	D3D12_CLEAR_VALUE depth_clear_value = {};
-	depth_clear_value.Format = DXGI_FORMAT_D32_FLOAT;
-	depth_clear_value.DepthStencil.Depth = 1.0f;
-	depth_clear_value.DepthStencil.Stencil = 0;
-
-	ComPtr<ID3D12Resource> depth_texture;
-	D3D12MA::Allocation* depth_texture_allocation = nullptr;
-	gpu_memory_allocator->CreateResource(
-		&depth_alloc_desc,
-		&depth_resource_desc,
-		D3D12_RESOURCE_STATE_DEPTH_WRITE,
-		&depth_clear_value,
-		&depth_texture_allocation,
-		IID_PPV_ARGS(&depth_texture)
-	);
-
-	D3D12_DEPTH_STENCIL_VIEW_DESC dsv_desc = {};
-	dsv_desc.Format = DXGI_FORMAT_D32_FLOAT;
-	dsv_desc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-	dsv_desc.Flags = D3D12_DSV_FLAG_NONE;
-
-	device->CreateDepthStencilView(depth_texture.Get(), &dsv_desc, depth_descriptor_heap->GetCPUDescriptorHandleForHeapStart());
-
-	array<ComPtr<ID3D12CommandAllocator>, backbuffer_count> command_allocators;
-	array<ComPtr<ID3D12Resource>, backbuffer_count> render_targets;
-	// 6. Create render target views (1 per frame), associating them with corresponding rtv descriptor heaps
-	{
-		D3D12_CPU_DESCRIPTOR_HANDLE rtv_descriptor_handle(rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart());
-
-		// Create a render target view for each frame.
-		for (UINT current_frame_index = 0; current_frame_index < backbuffer_count; current_frame_index++)
-		{
-			HR_CHECK(swapchain->GetBuffer(current_frame_index, IID_PPV_ARGS(&render_targets[current_frame_index])));
-
-			D3D12_RENDER_TARGET_VIEW_DESC render_target_view_desc = {};
-			render_target_view_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
-			render_target_view_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-
-			device->CreateRenderTargetView(render_targets[current_frame_index].Get(), &render_target_view_desc, rtv_descriptor_handle);
-			rtv_descriptor_handle.ptr += rtv_heap_offset;
-
-			// 7. Create a command allocator per-frame, which will be used to create our command lists
-			HR_CHECK(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&command_allocators[current_frame_index])));
-		}
-	}
 
 	// 8. Create our (empty) root signature, which describes resources to be used when running work on the GPU
 	ComPtr<ID3D12RootSignature> root_signature;
@@ -355,9 +426,9 @@ int main()
         .build(device);
 
 	// 12. Create Command list using command allocator and pipeline state, and close it (we'll record it later)
-	//FCS TODO: one command_list per frame_index, build command_list per-frame (may not need this, one command allocator per frame should be sufficient, as you can reset command lists after they've been submitted)
+	//FCS TODO: one command_list per frame_resources.frame_index, build command_list per-frame (may not need this, one command allocator per frame should be sufficient, as you can reset command lists after they've been submitted)
 	ComPtr<ID3D12GraphicsCommandList> command_list;
-	HR_CHECK(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocators[frame_index].Get(), pipeline_state.Get(), IID_PPV_ARGS(&command_list)));
+	HR_CHECK(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocators[frame_resources.frame_index].Get(), pipeline_state.Get(), IID_PPV_ARGS(&command_list)));
 	HR_CHECK(command_list->Close());
 
 	//Load Environment Map
@@ -374,7 +445,7 @@ int main()
 	cubemap_texture.set_name(TEXT("Cubemap Texture"));
 	cubemap_texture.create_cubemap_srv(device);
 
-	BindlessTextureManager texture_manager(device, gpu_memory_allocator);
+	BindlessResourceManager texture_manager(device, gpu_memory_allocator);
 	texture_manager.register_texture(cubemap_texture);
 
 	texture_manager.register_texture(ibl_diffuse_texture);
@@ -385,9 +456,6 @@ int main()
 
 	texture_manager.register_texture(hdr_texture);
 	texture_manager.register_texture(ibl_diffuse_texture);
-
-	//exit(0);
-	
 
 	//Setup cube
 	//Note: We render all faces at once, so we really only need one "Face" to rasterize (4 verts, 6 indices)
@@ -493,7 +561,7 @@ int main()
 	cube_cbuffer_data.proj = XMMatrixIdentity();
 	memcpy(cube_cbuffer_address, &cube_cbuffer_data, sizeof(cube_cbuffer_data));
 
-	HR_CHECK(command_list->Reset(command_allocators[frame_index].Get(), spherical_to_cube_pipeline_state.Get()));
+	HR_CHECK(command_list->Reset(command_allocators[frame_resources.frame_index].Get(), spherical_to_cube_pipeline_state.Get()));
 
 	auto cubemap_rt_barrier = CD3DX12_RESOURCE_BARRIER::Transition(cubemap_texture.texture_resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
 	command_list->ResourceBarrier(1, &cubemap_rt_barrier);
@@ -650,36 +718,6 @@ int main()
 		HR_CHECK(constant_buffer->Map(0, &no_read_range, reinterpret_cast<void**>(&cbv_gpu_addresses[i])));
 	}
 
-	// Create synchronization objects and wait until assets have been uploaded to the GPU.
-	{
-		for (uint32_t i = 0; i < backbuffer_count; ++i)
-		{
-			fence_values[i] = 0;
-		}
-
-		HR_CHECK(device->CreateFence(fence_values[frame_index], D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
-		fence_values[frame_index]++;
-
-		// Create an event handle to use for frame synchronization.
-		fence_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-		if (fence_event == nullptr)
-		{
-			HR_CHECK(HRESULT_FROM_WIN32(GetLastError()));
-		}
-
-		{   //WaitForGPU...
-			// Schedule a Signal command in the queue.
-			HR_CHECK(command_queue->Signal(fence.Get(), fence_values[frame_index]));
-
-			// Wait until the fence has been processed.
-			HR_CHECK(fence->SetEventOnCompletion(fence_values[frame_index], fence_event));
-			WaitForSingleObjectEx(fence_event, INFINITE, FALSE);
-
-			// Increment the fence value for the current frame.
-			fence_values[frame_index]++;
-		}
-	}
-
 	XMVECTOR cam_pos	 = XMVectorSet(0.f, -10.f, 30.f, 1.f);
 	XMVECTOR cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);
 	XMVECTOR cam_up		 = XMVectorSet(0.f, 1.f, 0.f, 0.f);
@@ -695,8 +733,28 @@ int main()
 	bool should_close = false;
 	
 	while (!should_close)
-	{		
-		//TODO: RenderTarget Resizing
+	{	
+		RECT client_rect;
+		if (GetClientRect(window, &client_rect))
+		{
+			LONG new_width = client_rect.right - client_rect.left;
+			LONG new_height = client_rect.bottom - client_rect.top;
+			if (new_width != width || new_height != height)
+			{
+				width = new_width;
+				height = new_height;
+				printf("Width: %lu Height: %lu\n", new_width, new_height);
+
+				//TODO: is this necessary?
+				for (size_t i = 0; i < backbuffer_count; ++i)
+				{
+					frame_resources.fence_values[i] = frame_resources.fence_values[frame_resources.frame_index];
+				}
+
+				frame_resources.resize(width, height, device, command_queue, gpu_memory_allocator);
+				// create_frame_resources(frame_resources, width, height);
+			}
+		}
 		
 		clock_t new_time = clock();
 		double delta_time = static_cast<double>(new_time - time) / CLOCKS_PER_SEC;
@@ -715,7 +773,7 @@ int main()
 		// Process any messages in the queue.
 		MSG msg = {};
 		while (PeekMessage(&msg, window, 0, 0, PM_REMOVE))
-		{
+		{			
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
 		}
@@ -760,11 +818,11 @@ int main()
 			scene_constant_buffer_data.proj = XMMatrixPerspectiveFovLH(fov_y, aspect_ratio, 0.01f, 100000.0f);
 			
 			scene_constant_buffer_data.cam_pos = cam_pos;
-			memcpy(cbv_gpu_addresses[frame_index], &scene_constant_buffer_data, sizeof(scene_constant_buffer_data));
+			memcpy(cbv_gpu_addresses[frame_resources.frame_index], &scene_constant_buffer_data, sizeof(scene_constant_buffer_data));
 
-			HR_CHECK(command_allocators[frame_index]->Reset());
+			HR_CHECK(command_allocators[frame_resources.frame_index]->Reset());
 
-			HR_CHECK(command_list->Reset(command_allocators[frame_index].Get(), pipeline_state.Get()));
+			HR_CHECK(command_list->Reset(command_allocators[frame_resources.frame_index].Get(), pipeline_state.Get()));
 
 			// Set necessary state.
 			command_list->SetGraphicsRootSignature(root_signature.Get());
@@ -774,7 +832,7 @@ int main()
 			command_list->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
 
 			//Slot 0: constant buffer view
-			command_list->SetGraphicsRootConstantBufferView(0, constant_buffers[frame_index]->GetGPUVirtualAddress());
+			command_list->SetGraphicsRootConstantBufferView(0, constant_buffers[frame_resources.frame_index]->GetGPUVirtualAddress());
 			//Slot 1: hdr texture
 			command_list->SetGraphicsRootDescriptorTable(1, ibl_diffuse_texture.texture_descriptor_heap_srv->GetGPUDescriptorHandleForHeapStart());
 
@@ -791,13 +849,13 @@ int main()
 			command_list->RSSetScissorRects(1, &scissor_rect);
 
 			// Indicate that the back buffer will be used as a render target.
-			auto present_to_rt_barrier = CD3DX12_RESOURCE_BARRIER::Transition(render_targets[frame_index].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+			auto present_to_rt_barrier = CD3DX12_RESOURCE_BARRIER::Transition(frame_resources.render_targets[frame_resources.frame_index].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 			command_list->ResourceBarrier(1, &present_to_rt_barrier);
 
-			D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
-			rtv_handle.ptr += frame_index * rtv_heap_offset;
+			D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = frame_resources.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
+			rtv_handle.ptr += frame_resources.frame_index * rtv_heap_offset;
 			
-			D3D12_CPU_DESCRIPTOR_HANDLE depth_handle = depth_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
+			D3D12_CPU_DESCRIPTOR_HANDLE depth_handle = frame_resources.depth_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
 
 			// Record commands.
 			command_list->OMSetRenderTargets(1, &rtv_handle, FALSE, &depth_handle);
@@ -824,7 +882,7 @@ int main()
 				command_list->SetDescriptorHeaps(_countof(bindless_heaps), bindless_heaps);
 
 				//0: Cbuffer
-				command_list->SetGraphicsRootConstantBufferView(0, constant_buffers[frame_index]->GetGPUVirtualAddress());
+				command_list->SetGraphicsRootConstantBufferView(0, constant_buffers[frame_resources.frame_index]->GetGPUVirtualAddress());
 				//1: bindless texture table
 				command_list->SetGraphicsRootDescriptorTable(1, texture_manager.get_texture_handle());
 				//2. bindless cubemap table
@@ -839,7 +897,7 @@ int main()
 			}
 			
 			// Indicate that the back buffer will now be used to present.
-			auto rt_to_present_barrier = CD3DX12_RESOURCE_BARRIER::Transition(render_targets[frame_index].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+			auto rt_to_present_barrier = CD3DX12_RESOURCE_BARRIER::Transition(frame_resources.render_targets[frame_resources.frame_index].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 			command_list->ResourceBarrier(1, &rt_to_present_barrier);
 
 			HR_CHECK(command_list->Close());
@@ -851,22 +909,25 @@ int main()
 			// Present the frame.
 			const bool vsync_enabled = true;
 			const UINT sync_interval = vsync_enabled ? 1 : 0;
-			HR_CHECK(swapchain->Present(sync_interval, 0));
+			HR_CHECK(frame_resources.swapchain->Present(sync_interval, 0));
 
+			frame_resources.wait_for_previous_frame(command_queue);
+
+			//TODO: Move to Frame Resources 
 			{   // WaitForPreviousFrame...
 				// Signal and increment the fence value.
-				const UINT64 current_fence_value = fence_values[frame_index];
-				HR_CHECK(command_queue->Signal(fence.Get(), current_fence_value));
-
-				frame_index = swapchain->GetCurrentBackBufferIndex();
-				// Wait until the previous frame is finished.
-				if (fence->GetCompletedValue() < fence_values[frame_index])
-				{
-					HR_CHECK(fence->SetEventOnCompletion(fence_values[frame_index], fence_event));
-					WaitForSingleObjectEx(fence_event, INFINITE, FALSE);
-				}
-
-				fence_values[frame_index] = current_fence_value + 1;
+				// const UINT64 current_fence_value = frame_resources.fence_values[frame_resources.frame_index];
+				// HR_CHECK(command_queue->Signal(frame_resources.fence.Get(), current_fence_value));
+				//
+				// frame_resources.frame_index = frame_resources.swapchain->GetCurrentBackBufferIndex();
+				// // Wait until the previous frame is finished.
+				// if (frame_resources.fence->GetCompletedValue() < frame_resources.fence_values[frame_resources.frame_index])
+				// {
+				// 	HR_CHECK(frame_resources.fence->SetEventOnCompletion(frame_resources.fence_values[frame_resources.frame_index], frame_resources.fence_event));
+				// 	WaitForSingleObjectEx(frame_resources.fence_event, INFINITE, FALSE);
+				// }
+				//
+				// frame_resources.fence_values[frame_resources.frame_index] = current_fence_value + 1;
 			}
 		}
 
@@ -900,7 +961,7 @@ int main()
 			constant_buffer_allocations[i]->Release();
 		}
 
-		depth_texture_allocation->Release();
+		frame_resources.depth_texture_allocation->Release();
 	}
 
 	gpu_memory_allocator->Release();
