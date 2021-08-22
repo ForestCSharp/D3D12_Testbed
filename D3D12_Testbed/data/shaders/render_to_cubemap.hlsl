@@ -15,6 +15,7 @@ cbuffer SceneConstantBuffer : register(b0)
     float4x4 proj;
     //TODO: vars for PBR
     float4 cam_pos;
+	float4 cam_dir;
     //TODO: light_array
 };
 

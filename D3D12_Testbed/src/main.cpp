@@ -37,6 +37,7 @@ struct SceneConstantBuffer
 	XMMATRIX view;
 	XMMATRIX proj;
 	XMVECTOR cam_pos;
+	XMVECTOR cam_dir;
 };
 
 struct GpuVertex
@@ -56,7 +57,7 @@ bool is_key_down(const int in_key)
 
 int main()
 {	
-	// 1. Create Our Window
+	// Create Our Window
 	HINSTANCE h_instance = GetModuleHandle(nullptr);
 
 	WNDCLASSEX window_class = { 0 };
@@ -68,7 +69,7 @@ int main()
 	window_class.lpszClassName = L"DXSampleClass";
 	RegisterClassEx(&window_class);
 
-	const bool borderless_fullscreen = false;
+	bool borderless_fullscreen = false;
 	
 	auto window_style = borderless_fullscreen ? WS_POPUP : WS_OVERLAPPEDWINDOW;
 	LONG width  = borderless_fullscreen ? GetSystemMetrics(SM_CXSCREEN) : 1280;
@@ -98,12 +99,6 @@ int main()
 		if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug_controller))))
 		{
 			debug_controller->EnableDebugLayer();
-
-			//ComPtr<ID3D12Debug1> debug_controller_1;
-			//if (SUCCEEDED(debug_controller->QueryInterface(IID_PPV_ARGS(&debug_controller_1))))
-			//{
-			//	debug_controller_1->SetEnableGPUBasedValidation(true);
-			//}
 		}
 	}
 
@@ -246,7 +241,7 @@ int main()
 				render_target_view_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
 
 				device->CreateRenderTargetView(render_targets[current_frame_index].Get(), &render_target_view_desc, rtv_descriptor_handle);
-				UINT rtv_heap_offset = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+				const UINT rtv_heap_offset = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 				rtv_descriptor_handle.ptr += rtv_heap_offset;
 			}
 
@@ -304,6 +299,11 @@ int main()
 
 			device->CreateDepthStencilView(depth_texture.Get(), &dsv_desc, depth_descriptor_heap->GetCPUDescriptorHandleForHeapStart());
 
+			for (size_t i = 0; i < backbuffer_count; ++i)
+			{
+				fence_values[i] = fence_values[frame_index];
+			}
+			
 			frame_index = swapchain->GetCurrentBackBufferIndex();
 		}
 
@@ -326,18 +326,10 @@ int main()
 
 	FrameResources frame_resources(width, height, factory, device, gpu_memory_allocator, command_queue, window);
 
-	// 5. Create descriptor heaps (1 per frame for CBV desc heaps)
-
-	UINT rtv_heap_offset = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-
-	// Create Depth Buffer
-
 	// 8. Create our (empty) root signature, which describes resources to be used when running work on the GPU
 	ComPtr<ID3D12RootSignature> root_signature;
 	{
 		std::array<CD3DX12_ROOT_PARAMETER1,2> root_parameters;
-
-		//TODO: Could store multiple in one table (via CD3DX12_ROOT_PARAMETER1::InitAsDescriptorTable)
 
 		// Constant Buffer View
 		root_parameters[0].InitAsConstantBufferView(0,0,D3D12_ROOT_DESCRIPTOR_FLAG_NONE,D3D12_SHADER_VISIBILITY_ALL);
@@ -371,7 +363,7 @@ int main()
 		.with_debug_name(L"pipeline_state")
 		.build(device);
 
-	//TODO: BEGIN TESTING BINDLESS TABLE
+	//TODO: Helpers for this in BindlessResourceManager
 	ComPtr<ID3D12RootSignature> bindless_root_signature;
 	{
 		std::array<CD3DX12_ROOT_PARAMETER1, 3> root_parameters;
@@ -411,7 +403,6 @@ int main()
 		HR_CHECK(D3D12SerializeVersionedRootSignature(&root_signature_desc, &signature_blob, &error_blob));
 		HR_CHECK(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(&bindless_root_signature)));
 	}
-	//TODO: END TESTING BINDLESS TABLE
 
 	ComPtr<ID3D12PipelineState> skybox_pipeline_state = GraphicsPipelineBuilder()
         .with_root_signature(bindless_root_signature)
@@ -426,36 +417,35 @@ int main()
         .build(device);
 
 	// 12. Create Command list using command allocator and pipeline state, and close it (we'll record it later)
-	//FCS TODO: one command_list per frame_resources.frame_index, build command_list per-frame (may not need this, one command allocator per frame should be sufficient, as you can reset command lists after they've been submitted)
 	ComPtr<ID3D12GraphicsCommandList> command_list;
 	HR_CHECK(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocators[frame_resources.frame_index].Get(), pipeline_state.Get(), IID_PPV_ARGS(&command_list)));
 	HR_CHECK(command_list->Close());
 
 	//Load Environment Map
 	//TODO: remove this once we get our cubemap convolved
-	TextureResource ibl_diffuse_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, "data/hdr/Frozen_Waterfall_Env.hdr");
+	Texture ibl_diffuse_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, "data/hdr/Frozen_Waterfall_Env.hdr");
 	ibl_diffuse_texture.set_name(TEXT("Filtered Env Map (equirectangular)"));
 
-	TextureResource hdr_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, "data/hdr/Frozen_Waterfall_Ref.hdr");
+	Texture hdr_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, "data/hdr/Frozen_Waterfall_Ref.hdr");
 	hdr_texture.set_name(TEXT("Env Map (equirectangular)"));
 
 	const UINT cube_size = 512;
 	DXGI_FORMAT cubemap_format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-	TextureResource cubemap_texture(device, gpu_memory_allocator, cubemap_format, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, cube_size, cube_size, 6);
+	Texture cubemap_texture(device, gpu_memory_allocator, cubemap_format, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, cube_size, cube_size, 6);
 	cubemap_texture.set_name(TEXT("Cubemap Texture"));
 	cubemap_texture.create_cubemap_srv(device);
 
 	BindlessResourceManager texture_manager(device, gpu_memory_allocator);
 	texture_manager.register_texture(cubemap_texture);
-
-	texture_manager.register_texture(ibl_diffuse_texture);
-	texture_manager.register_texture(hdr_texture);
-
-	texture_manager.unregister_texture(ibl_diffuse_texture);
-	texture_manager.unregister_texture(hdr_texture);
-
-	texture_manager.register_texture(hdr_texture);
-	texture_manager.register_texture(ibl_diffuse_texture);
+	
+	// texture_manager.register_texture(ibl_diffuse_texture);
+	// texture_manager.register_texture(hdr_texture);
+	//
+	// texture_manager.unregister_texture(ibl_diffuse_texture);
+	// texture_manager.unregister_texture(hdr_texture);
+	//
+	// texture_manager.register_texture(hdr_texture);
+	// texture_manager.register_texture(ibl_diffuse_texture);
 
 	//Setup cube
 	//Note: We render all faces at once, so we really only need one "Face" to rasterize (4 verts, 6 indices)
@@ -561,9 +551,10 @@ int main()
 	cube_cbuffer_data.proj = XMMatrixIdentity();
 	memcpy(cube_cbuffer_address, &cube_cbuffer_data, sizeof(cube_cbuffer_data));
 
+	//Reset command list using this frame's command allocator
 	HR_CHECK(command_list->Reset(command_allocators[frame_resources.frame_index].Get(), spherical_to_cube_pipeline_state.Get()));
 
-	auto cubemap_rt_barrier = CD3DX12_RESOURCE_BARRIER::Transition(cubemap_texture.texture_resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+	auto cubemap_rt_barrier = CD3DX12_RESOURCE_BARRIER::Transition(cubemap_texture.resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
 	command_list->ResourceBarrier(1, &cubemap_rt_barrier);
 	command_list->OMSetRenderTargets(static_cast<UINT>(cubemap_texture.rtv_handles.size()), cubemap_texture.rtv_handles.data(), FALSE, nullptr);
 
@@ -595,10 +586,10 @@ int main()
 	command_list->IASetIndexBuffer(&cube.index_buffer_view);
 	command_list->DrawIndexedInstanced(cube.index_count(), 1, 0, 0, 0);
 
-	auto cubemap_pixel_shader_barrier = CD3DX12_RESOURCE_BARRIER::Transition(cubemap_texture.texture_resource.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	auto cubemap_pixel_shader_barrier = CD3DX12_RESOURCE_BARRIER::Transition(cubemap_texture.resource.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	command_list->ResourceBarrier(1, &cubemap_pixel_shader_barrier);
 
-	//TODO: now we use our cubemap as a pixel shader resource and convolute
+	//TODO: use our cubemap as a pixel shader resource and convolute it
 
 	HR_CHECK(command_list->Close());
 
@@ -714,7 +705,7 @@ int main()
 			IID_PPV_ARGS(&constant_buffer)
 		));
 
-		// Map and initialize the constant buffer. We don't unmap this until the app closes, as we constantly update it
+		// Map and initialize the constant buffer. don't unmap this until the app closes, as it is constantly updated
 		HR_CHECK(constant_buffer->Map(0, &no_read_range, reinterpret_cast<void**>(&cbv_gpu_addresses[i])));
 	}
 
@@ -745,14 +736,7 @@ int main()
 				height = new_height;
 				printf("Width: %lu Height: %lu\n", new_width, new_height);
 
-				//TODO: is this necessary?
-				for (size_t i = 0; i < backbuffer_count; ++i)
-				{
-					frame_resources.fence_values[i] = frame_resources.fence_values[frame_resources.frame_index];
-				}
-
 				frame_resources.resize(width, height, device, command_queue, gpu_memory_allocator);
-				// create_frame_resources(frame_resources, width, height);
 			}
 		}
 		
@@ -778,8 +762,9 @@ int main()
 			DispatchMessage(&msg);
 		}
 
-		{ //Rendering
-
+		//Rendering
+		if (width > 0 && height > 0)
+		{
 			{	//Camera Control
 				const XMVECTOR cam_right = XMVector3Normalize(XMVector3Cross(cam_up, cam_forward));
 				
@@ -801,7 +786,6 @@ int main()
 				{
 					const float rot_rate = 4.0f;
 
-					//TODO: compute real pitch + yaw axes from orientation
 					auto pitch_rot = XMMatrixRotationAxis( cam_right, rot_rate * mouse_delta_y);
 					auto yaw_rot = XMMatrixRotationAxis( cam_up, rot_rate * mouse_delta_x);
 					auto total_rot = XMMatrixMultiply(pitch_rot, yaw_rot);
@@ -818,6 +802,7 @@ int main()
 			scene_constant_buffer_data.proj = XMMatrixPerspectiveFovLH(fov_y, aspect_ratio, 0.01f, 100000.0f);
 			
 			scene_constant_buffer_data.cam_pos = cam_pos;
+			scene_constant_buffer_data.cam_dir = cam_forward;
 			memcpy(cbv_gpu_addresses[frame_resources.frame_index], &scene_constant_buffer_data, sizeof(scene_constant_buffer_data));
 
 			HR_CHECK(command_allocators[frame_resources.frame_index]->Reset());
@@ -827,7 +812,7 @@ int main()
 			// Set necessary state.
 			command_list->SetGraphicsRootSignature(root_signature.Get());
 
-			//FCS NOTE: Only one heap of a given type can be set at a time, so we'll eventually want one big heap
+			//NOTE: Only one heap of a given type can be set at a time
 			ID3D12DescriptorHeap* descriptor_heaps[] = { ibl_diffuse_texture.texture_descriptor_heap_srv.Get() };
 			command_list->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
 
@@ -853,6 +838,7 @@ int main()
 			command_list->ResourceBarrier(1, &present_to_rt_barrier);
 
 			D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = frame_resources.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
+			const UINT rtv_heap_offset = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 			rtv_handle.ptr += frame_resources.frame_index * rtv_heap_offset;
 			
 			D3D12_CPU_DESCRIPTOR_HANDLE depth_handle = frame_resources.depth_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
@@ -884,12 +870,9 @@ int main()
 				//0: Cbuffer
 				command_list->SetGraphicsRootConstantBufferView(0, constant_buffers[frame_resources.frame_index]->GetGPUVirtualAddress());
 				//1: bindless texture table
-				command_list->SetGraphicsRootDescriptorTable(1, texture_manager.get_texture_handle());
+				command_list->SetGraphicsRootDescriptorTable(1, texture_manager.get_texture_gpu_handle());
 				//2. bindless cubemap table
-				command_list->SetGraphicsRootDescriptorTable(2, texture_manager.get_cubemap_handle());
-
-				//TODO: need to get correct location
-				//command_list->SetGraphicsRootDescriptorTable(2, texture_manager.bindless_cubemap_descriptor_heap->GetGPUDescriptorHandleForHeapStart());
+				command_list->SetGraphicsRootDescriptorTable(2, texture_manager.get_cubemap_gpu_handle());
 
 				command_list->IASetVertexBuffers(0, 1, &cube.vertex_buffer_view);
 				command_list->IASetIndexBuffer(&cube.index_buffer_view);
@@ -912,23 +895,6 @@ int main()
 			HR_CHECK(frame_resources.swapchain->Present(sync_interval, 0));
 
 			frame_resources.wait_for_previous_frame(command_queue);
-
-			//TODO: Move to Frame Resources 
-			{   // WaitForPreviousFrame...
-				// Signal and increment the fence value.
-				// const UINT64 current_fence_value = frame_resources.fence_values[frame_resources.frame_index];
-				// HR_CHECK(command_queue->Signal(frame_resources.fence.Get(), current_fence_value));
-				//
-				// frame_resources.frame_index = frame_resources.swapchain->GetCurrentBackBufferIndex();
-				// // Wait until the previous frame is finished.
-				// if (frame_resources.fence->GetCompletedValue() < frame_resources.fence_values[frame_resources.frame_index])
-				// {
-				// 	HR_CHECK(frame_resources.fence->SetEventOnCompletion(frame_resources.fence_values[frame_resources.frame_index], frame_resources.fence_event));
-				// 	WaitForSingleObjectEx(frame_resources.fence_event, INFINITE, FALSE);
-				// }
-				//
-				// frame_resources.fence_values[frame_resources.frame_index] = current_fence_value + 1;
-			}
 		}
 
 		if (is_key_down(VK_ESCAPE) || !IsWindow(window) )
@@ -939,7 +905,7 @@ int main()
 
 	wait_gpu_idle(device, command_queue);
 
-	printf("FPS: %f", (double)frames_rendered / accumulated_delta_time);
+	printf("FPS: %f", static_cast<float>(frames_rendered) / accumulated_delta_time);
 
 	
 	{ //Free all memory allocated with D3D12 Memory Allocator

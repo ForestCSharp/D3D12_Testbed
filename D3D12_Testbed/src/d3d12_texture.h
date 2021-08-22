@@ -27,12 +27,12 @@ using Microsoft::WRL::ComPtr;
 .build();
 */
 
-#define INVALID_INDEX -1
+constexpr int INVALID_INDEX = -1;
 
-struct TextureResource
+struct Texture
 {
-	ComPtr<ID3D12Resource> texture_resource;
-	D3D12MA::Allocation* texture_allocation = nullptr;
+	ComPtr<ID3D12Resource> resource;
+	D3D12MA::Allocation* allocation = nullptr;
 
 	int bindless_index = INVALID_INDEX;
 
@@ -47,14 +47,14 @@ struct TextureResource
 	ComPtr<ID3D12DescriptorHeap> texture_descriptor_heap_rtv;
 	std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> rtv_handles;
 
-	TextureResource(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format, const D3D12_RESOURCE_FLAGS flags, const UINT image_width, const UINT image_height, const UINT image_count)
+	Texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format, const D3D12_RESOURCE_FLAGS flags, const UINT image_width, const UINT image_height, const UINT image_count)
 	{
 		create_texture(device, gpu_memory_allocator, format, flags, image_width, image_height, image_count);
 		set_name(TEXT("DefaultTexture"));
 	}
 
 	//Loads a single texture from file
-	TextureResource(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue, const DXGI_FORMAT format, const char* file)
+	Texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue, const DXGI_FORMAT format, const char* file)
 	{
 		int image_width, image_height;
 		const int desired_channels = 4; //We want an alpha channel
@@ -76,7 +76,7 @@ struct TextureResource
 			D3D12_RESOURCE_DESC staging_buffer_desc = {};
 			staging_buffer_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
 			staging_buffer_desc.Alignment = 0;
-			staging_buffer_desc.Width = GetRequiredIntermediateSize(texture_resource.Get(), 0, 1); //Important
+			staging_buffer_desc.Width = GetRequiredIntermediateSize(resource.Get(), 0, 1); //Important
 			staging_buffer_desc.Height = 1;
 			staging_buffer_desc.DepthOrArraySize = 1;
 			staging_buffer_desc.MipLevels = 1;
@@ -109,8 +109,8 @@ struct TextureResource
 			subresource_data.RowPitch = image_width * image_pixel_size;
 			subresource_data.SlicePitch = subresource_data.RowPitch * image_height;
 
-			UpdateSubresources(command_list.Get(), texture_resource.Get(), staging_buffer.Get(), 0, 0, 1, &subresource_data);
-			auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(texture_resource.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+			UpdateSubresources(command_list.Get(), resource.Get(), staging_buffer.Get(), 0, 0, 1, &subresource_data);
+			auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(resource.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 			command_list->ResourceBarrier(1, &barrier);
 
 			command_list->Close();
@@ -163,8 +163,8 @@ struct TextureResource
 			&texture_desc,
 			D3D12_RESOURCE_STATE_COMMON,
 			can_have_clear_value ? &clear_value : nullptr,
-			&texture_allocation,
-			IID_PPV_ARGS(&texture_resource)
+			&allocation,
+			IID_PPV_ARGS(&resource)
 		));
 
 		create_basic_srv(device);
@@ -176,7 +176,7 @@ struct TextureResource
 		}
 	}
 
-	//TODO: Should likely be separated from TextureResource struct
+	//TODO: Should likely be separated from Texture struct
 	//Creates a basic SRV for this texture resource
 	//TODO: RTV
 	void create_basic_srv(const ComPtr<ID3D12Device> device)
@@ -192,13 +192,13 @@ struct TextureResource
 		HR_CHECK(device->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&texture_descriptor_heap_srv)));
 		texture_descriptor_heap_srv->SetName(TEXT("texture_descriptor_heap_srv"));
 
-		const UINT16 texture_array_size = texture_resource->GetDesc().DepthOrArraySize;
+		const UINT16 texture_array_size = resource->GetDesc().DepthOrArraySize;
 		const bool is_texture_array = texture_array_size > 1;
 
 		srv_desc = {};
 
 		//Shared State
-		srv_desc.Format = texture_resource->GetDesc().Format;
+		srv_desc.Format = resource->GetDesc().Format;
 		srv_desc.ViewDimension = is_texture_array ? D3D12_SRV_DIMENSION_TEXTURE2DARRAY : D3D12_SRV_DIMENSION_TEXTURE2D;
 		srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
@@ -219,7 +219,7 @@ struct TextureResource
 			srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
 		}
 
-		device->CreateShaderResourceView(texture_resource.Get(), &srv_desc, texture_descriptor_heap_srv->GetCPUDescriptorHandleForHeapStart());
+		device->CreateShaderResourceView(resource.Get(), &srv_desc, texture_descriptor_heap_srv->GetCPUDescriptorHandleForHeapStart());
 	}
 
 	void create_cubemap_srv(const ComPtr<ID3D12Device> device)
@@ -235,25 +235,25 @@ struct TextureResource
 		HR_CHECK(device->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&cubemap_descriptor_heap_srv)));
 		cubemap_descriptor_heap_srv->SetName(TEXT("cubemap_descriptor_heap_srv"));
 
-		const UINT16 texture_array_size = texture_resource->GetDesc().DepthOrArraySize;
+		const UINT16 texture_array_size = resource->GetDesc().DepthOrArraySize;
 		assert(texture_array_size >= 6);
 
 		D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
 
-		srv_desc.Format = texture_resource->GetDesc().Format;
+		srv_desc.Format = resource->GetDesc().Format;
 		srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
 		srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 		srv_desc.TextureCube.MostDetailedMip = 0;
 		srv_desc.TextureCube.MipLevels = 1;
 		srv_desc.TextureCube.ResourceMinLODClamp = 0.f;
 
-		device->CreateShaderResourceView(texture_resource.Get(), &srv_desc, cubemap_descriptor_heap_srv->GetCPUDescriptorHandleForHeapStart());
+		device->CreateShaderResourceView(resource.Get(), &srv_desc, cubemap_descriptor_heap_srv->GetCPUDescriptorHandleForHeapStart());
 		is_cubemap = true;
 	}
 
 	void create_rtv(const ComPtr<ID3D12Device> device)
 	{
-		D3D12_RESOURCE_DESC resource_desc = texture_resource->GetDesc();
+		D3D12_RESOURCE_DESC resource_desc = resource->GetDesc();
 		assert(resource_desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
 
 		//create texture descriptor heap
@@ -294,7 +294,7 @@ struct TextureResource
 				rtv_desc.Texture2D.MipSlice = 0;
 				rtv_desc.Texture2D.PlaneSlice = 0;
 			}
-			device->CreateRenderTargetView(texture_resource.Get(), &rtv_desc, rtv_descriptor_handle);
+			device->CreateRenderTargetView(resource.Get(), &rtv_desc, rtv_descriptor_handle);
 			rtv_handles.push_back(rtv_descriptor_handle);
 			rtv_descriptor_handle.ptr += rtv_heap_offset;
 		}
@@ -302,16 +302,16 @@ struct TextureResource
 
 	void set_name(const LPCWSTR in_name) const
 	{
-		assert(texture_resource);
-		texture_resource->SetName(in_name);
+		assert(resource);
+		resource->SetName(in_name);
 	}
 
 	void release()
 	{
-		if (texture_allocation)
+		if (allocation)
 		{
-			texture_allocation->Release();
-			texture_allocation = nullptr;
+			allocation->Release();
+			allocation = nullptr;
 		}
 	}
 };
@@ -327,8 +327,8 @@ struct BindlessResourceManager
 
 	ComPtr<ID3D12DescriptorHeap> bindless_descriptor_heap;
 
-	TextureResource invalid_texture;
-	TextureResource invalid_cubemap;
+	Texture invalid_texture;
+	Texture invalid_cubemap;
 
 	std::vector<size_t> texture_free_indices;
 	size_t texture_current_size = 0;
@@ -372,14 +372,14 @@ struct BindlessResourceManager
 		//TODO: Need to unset all textures bindless indices
 	}
 
-	void create_srv_at_index(TextureResource& in_texture_resource, size_t index) const
+	void create_srv_at_index(Texture& in_texture_resource, size_t index) const
 	{
 		const bool is_cubemap = in_texture_resource.is_cubemap;
 
 		D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
 
 		//Shared State
-		srv_desc.Format = in_texture_resource.texture_resource->GetDesc().Format;
+		srv_desc.Format = in_texture_resource.resource->GetDesc().Format;
 		srv_desc.ViewDimension = is_cubemap ? D3D12_SRV_DIMENSION_TEXTURECUBE : D3D12_SRV_DIMENSION_TEXTURE2D;
 		srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
@@ -399,20 +399,21 @@ struct BindlessResourceManager
 
 		if (is_cubemap)
 		{
+			//Cubemap srvs are second, offset by BINDLESS_TABLE_SIZE
 			index += BINDLESS_TABLE_SIZE;
 		}
 		UINT heap_offset = index * cbv_srv_uav_heap_offset;
 
 		D3D12_CPU_DESCRIPTOR_HANDLE descriptor_handle = bindless_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
 		descriptor_handle.ptr += heap_offset;
-		device->CreateShaderResourceView(in_texture_resource.texture_resource.Get(), &srv_desc, descriptor_handle);
+		device->CreateShaderResourceView(in_texture_resource.resource.Get(), &srv_desc, descriptor_handle);
 
 		in_texture_resource.bindless_index = index;
 	}
 
-	void register_texture(TextureResource& in_texture_resource)
+	void register_texture(Texture& in_texture_resource)
 	{
-		bool is_cubemap = in_texture_resource.is_cubemap;
+		const bool is_cubemap = in_texture_resource.is_cubemap;
 
 		if (in_texture_resource.bindless_index != INVALID_INDEX)
 		{
@@ -447,12 +448,12 @@ struct BindlessResourceManager
 		}
 	}
 
-	void unregister_texture(TextureResource& in_texture_resource)
+	void unregister_texture(Texture& in_texture_resource)
 	{
 
 		if (in_texture_resource.bindless_index != INVALID_INDEX)
 		{
-			size_t index = in_texture_resource.bindless_index;
+			const size_t index = in_texture_resource.bindless_index;
 
 			const bool is_cubemap = in_texture_resource.is_cubemap;
 			std::vector<size_t>& free_list_ref = is_cubemap ? cubemap_free_indices : texture_free_indices;
@@ -474,21 +475,20 @@ struct BindlessResourceManager
 
 			in_texture_resource.bindless_index = INVALID_INDEX;
 
-			//TODO: Clean up SRV?
-			TextureResource& invalid_resource = is_cubemap ? invalid_cubemap : invalid_texture;
+			Texture& invalid_resource = is_cubemap ? invalid_cubemap : invalid_texture;
 			create_srv_at_index(invalid_resource, index);
 		}
 	}
 
-	D3D12_GPU_DESCRIPTOR_HANDLE get_texture_handle() const
+	D3D12_GPU_DESCRIPTOR_HANDLE get_texture_gpu_handle() const
 	{
 		return bindless_descriptor_heap->GetGPUDescriptorHandleForHeapStart();
 	}
 
-	D3D12_GPU_DESCRIPTOR_HANDLE get_cubemap_handle() const
+	D3D12_GPU_DESCRIPTOR_HANDLE get_cubemap_gpu_handle() const
 	{
 		D3D12_GPU_DESCRIPTOR_HANDLE out_handle = bindless_descriptor_heap->GetGPUDescriptorHandleForHeapStart();
-		UINT cubemap_offset = BINDLESS_TABLE_SIZE * cbv_srv_uav_heap_offset;
+		const UINT cubemap_offset = BINDLESS_TABLE_SIZE * cbv_srv_uav_heap_offset;
 		out_handle.ptr += cubemap_offset;
 		return out_handle;
 	}

@@ -14,6 +14,7 @@ cbuffer SceneConstantBuffer : register(b0)
     float4x4 view;
     float4x4 proj;
     float4 cam_pos;
+	float4 cam_dir;
 };
 
 #define myTex2DSpace space1

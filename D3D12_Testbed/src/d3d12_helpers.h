@@ -81,7 +81,7 @@ struct Mesh
 		resource_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 		resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
 		
-		// FCS TODO: Need to upload with upload heap, then copy over to D3D12_HEAP_TYPE_DEFAULT (Staging Buffer)
+		// FCS TODO: Need to upload with upload heap (see: "UpdateSubresources", used in Texture)
 		
 		D3D12MA::ALLOCATION_DESC alloc_desc = {};
 		alloc_desc.HeapType = D3D12_HEAP_TYPE_UPLOAD;

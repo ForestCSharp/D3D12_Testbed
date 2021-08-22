@@ -6,6 +6,7 @@ cbuffer SceneConstantBuffer : register(b0)
     float4x4 proj;
     //TODO: vars for PBR
     float4 cam_pos;
+	float4 cam_dir;
     //TODO: light_array
 };
 
@@ -109,11 +110,14 @@ float4 ps_main(const PsInput input) : SV_TARGET
 
     //TODO: Pass from CPU
     Light lights[NUM_LIGHTS];
-    float offset = 10;
-    lights[0].pos = cam_pos.xyz + float3(0, offset, 0);
-    lights[1].pos = cam_pos.xyz + float3(0,-offset,0);
-    lights[2].pos = cam_pos.xyz + float3(offset,0,0);
-    lights[3].pos = cam_pos.xyz + float3(-offset,0,0);
+    float offset = 2;
+	float3 forward_offset = cam_dir.xyz * 3;
+	float3 cam_up 	 = float3(0,1,0);
+	float3 cam_right = cross(cam_up, cam_dir);
+    lights[0].pos = cam_pos.xyz + forward_offset + (cam_up * offset);
+    lights[1].pos = cam_pos.xyz + forward_offset - (cam_up * offset);
+    lights[2].pos = cam_pos.xyz + forward_offset + (cam_right * offset);
+    lights[3].pos = cam_pos.xyz + forward_offset - (cam_right * offset);
 
     float3 brdf_lighting = float3(0,0,0);
 
