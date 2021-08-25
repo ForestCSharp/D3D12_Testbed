@@ -16,11 +16,20 @@ cbuffer SceneConstantBuffer : register(b0)
     //TODO: vars for PBR
     float4 cam_pos;
 	float4 cam_dir;
-    //TODO: light_array
+    uint texture_index;
 };
 
+//TODO: HLSL header file for bindless resources
+#define myTex2DSpace space1
+#define myTexCubeSpace space2
+
+#define BINDLESS_TABLE_SIZE 10000 //TODO Sync up with C++
+
+Texture2D   Texture2DTable[BINDLESS_TABLE_SIZE]   : register(t0, myTex2DSpace);
+TextureCube TextureCubeTable[BINDLESS_TABLE_SIZE] : register(t0, myTexCubeSpace);
+
 //Testing Equirectangular Sampling
-Texture2D<float4> hdr_texture : register(t0);
+//Texture2D<float4> hdr_texture : register(t0);
 SamplerState      hdr_sampler : register(s0);
 
 float2 spherical_uv(float3 v)
@@ -36,7 +45,7 @@ float2 spherical_uv(float3 v)
 float4 sample_spherical_map(const float3 v)
 {
     float2 uv = spherical_uv(v);
-    const float3 color = hdr_texture.Sample(hdr_sampler, uv).rgb;
+    const float3 color = Texture2DTable[texture_index].Sample(hdr_sampler, uv).rgb;
     return float4(color, 1);
 }
 

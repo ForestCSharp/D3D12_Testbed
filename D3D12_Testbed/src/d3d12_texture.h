@@ -372,7 +372,7 @@ struct BindlessResourceManager
 		//TODO: Need to unset all textures bindless indices
 	}
 
-	void create_srv_at_index(Texture& in_texture_resource, size_t index) const
+	void create_srv_at_index(Texture& in_texture_resource, const size_t index) const
 	{
 		const bool is_cubemap = in_texture_resource.is_cubemap;
 
@@ -397,12 +397,8 @@ struct BindlessResourceManager
 			srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
 		}
 
-		if (is_cubemap)
-		{
-			//Cubemap srvs are second, offset by BINDLESS_TABLE_SIZE
-			index += BINDLESS_TABLE_SIZE;
-		}
-		UINT heap_offset = index * cbv_srv_uav_heap_offset;
+		const size_t heap_index = is_cubemap ? index + BINDLESS_TABLE_SIZE : index;
+		UINT heap_offset = heap_index * cbv_srv_uav_heap_offset;
 
 		D3D12_CPU_DESCRIPTOR_HANDLE descriptor_handle = bindless_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
 		descriptor_handle.ptr += heap_offset;

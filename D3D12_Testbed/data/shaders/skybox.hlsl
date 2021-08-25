@@ -15,18 +15,19 @@ cbuffer SceneConstantBuffer : register(b0)
     float4x4 proj;
     float4 cam_pos;
 	float4 cam_dir;
+	uint texture_index;
 };
 
+//TODO: HLSL header file for bindless resources
 #define myTex2DSpace space1
 #define myTexCubeSpace space2
 
 #define BINDLESS_TABLE_SIZE 10000 //TODO Sync up with C++
 
-Texture2D Texture2DTable[BINDLESS_TABLE_SIZE]      : register(t0, myTex2DSpace);
-TextureCube TextureCubeTable[BINDLESS_TABLE_SIZE]  : register(t0, myTexCubeSpace);
+Texture2D   Texture2DTable[BINDLESS_TABLE_SIZE]   : register(t0, myTex2DSpace);
+TextureCube TextureCubeTable[BINDLESS_TABLE_SIZE] : register(t0, myTexCubeSpace);
 
 //Testing Equirectangular Sampling
-//TextureCube       cubemap_texture : register(t0);
 SamplerState      cubemap_sampler : register(s0);
 
 static matrix identity =
@@ -76,7 +77,7 @@ PsInput vs_main(const float3 position : POSITION, const float3 normal : NORMAL, 
 float4 ps_main(const PsInput input) : SV_TARGET
 {
     const float3 dir = normalize(input.world_pos);    
-    float4 out_color = TextureCubeTable[0].Sample(cubemap_sampler, dir);
+    float4 out_color = TextureCubeTable[texture_index].Sample(cubemap_sampler, dir);
 
     return out_color;
 }

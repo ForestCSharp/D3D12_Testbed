@@ -239,11 +239,11 @@ struct GraphicsPipelineBuilder
 		return *this;
 	}
 
-	GraphicsPipelineBuilder& with_rtv_formats(std::vector<DXGI_FORMAT> rtv_formats)
+	GraphicsPipelineBuilder& with_rtv_formats(const std::initializer_list<DXGI_FORMAT> in_rtv_formats)
 	{
-		assert(rtv_formats.size() <= 8);
+		assert(in_rtv_formats.size() <= 8);
+		std::vector<DXGI_FORMAT> rtv_formats(in_rtv_formats);
 		
-		//D3D12_RT_FORMAT_ARRAY rtv_format_array = {};
 		pso_desc.NumRenderTargets = static_cast<UINT>(rtv_formats.size());
 		for (UINT i = 0; i < pso_desc.NumRenderTargets; ++i)
 		{
@@ -278,8 +278,6 @@ struct GraphicsPipelineBuilder
 	// 	pso_desc.InputLayout.pInputElementDescs = input_element_descs.data();
 	// 	return *this;
 	// }
-
-	//TODO: More rasterizer setters
 
 	GraphicsPipelineBuilder& with_cull_mode(const D3D12_CULL_MODE in_cull_mode)
 	{

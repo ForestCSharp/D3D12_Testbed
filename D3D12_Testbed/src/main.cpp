@@ -32,12 +32,19 @@ using std::array;
 #include "d3d12_helpers.h"
 #include "d3d12_texture.h"
 
+#define IMGUI_IMPLEMENTATION
+#include "../third_party/DearImGui/misc/single_file/imgui_single_file.h"
+
+#include "../third_party/DearImGui/backends/imgui_impl_win32.h"
+#include "../third_party/DearImGui/backends/imgui_impl_dx12.h"
+
 struct SceneConstantBuffer
 {
 	XMMATRIX view;
 	XMMATRIX proj;
 	XMVECTOR cam_pos;
 	XMVECTOR cam_dir;
+	UINT	 texture_index;
 };
 
 struct GpuVertex
@@ -55,6 +62,19 @@ bool is_key_down(const int in_key)
 	return GetKeyState(in_key) & 0x8000;
 }
 
+// Forward declare message handler from imgui_impl_win32.cpp
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+	if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
+	{
+		return true;
+	}
+
+	return ::DefWindowProc(hWnd, msg, wParam, lParam);
+}
+
 int main()
 {	
 	// Create Our Window
@@ -63,7 +83,7 @@ int main()
 	WNDCLASSEX window_class = { 0 };
 	window_class.cbSize = sizeof(WNDCLASSEX);
 	window_class.style = CS_HREDRAW | CS_VREDRAW;
-	window_class.lpfnWndProc = DefWindowProc;
+	window_class.lpfnWndProc = WndProc;
 	window_class.hInstance = h_instance;
 	window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
 	window_class.lpszClassName = L"DXSampleClass";
@@ -91,7 +111,6 @@ int main()
 		NULL); //Could pass userdata to window proc here
 
 	ShowWindow(window, SW_SHOW);
-
 
 	if (IsDebuggerPresent())
 	{
@@ -149,6 +168,28 @@ int main()
 		// Create a command allocator per-frame, which will be used to create our command lists
 		HR_CHECK(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&command_allocators[current_frame_index])));
 	}
+
+
+	//Init ImGui
+	ImGui::CreateContext();
+	ImGuiIO& io = ImGui::GetIO(); (void)io;
+	ImGui_ImplWin32_Init(window);
+
+	D3D12_DESCRIPTOR_HEAP_DESC imgui_descriptor_heap_desc = {};
+	imgui_descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+	imgui_descriptor_heap_desc.NumDescriptors = 1;
+	imgui_descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+
+	ComPtr<ID3D12DescriptorHeap> imgui_descriptor_heap;
+	HR_CHECK(device->CreateDescriptorHeap(&imgui_descriptor_heap_desc, IID_PPV_ARGS(&imgui_descriptor_heap)));
+
+	ImGui_ImplDX12_Init(device.Get(),
+						backbuffer_count, 
+						DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, 
+						imgui_descriptor_heap.Get(),
+						imgui_descriptor_heap->GetCPUDescriptorHandleForHeapStart(), 
+						imgui_descriptor_heap->GetGPUDescriptorHandleForHeapStart()
+					   );
 
 	struct FrameResources
 	{
@@ -435,17 +476,19 @@ int main()
 	cubemap_texture.set_name(TEXT("Cubemap Texture"));
 	cubemap_texture.create_cubemap_srv(device);
 
-	BindlessResourceManager texture_manager(device, gpu_memory_allocator);
-	texture_manager.register_texture(cubemap_texture);
-	
-	// texture_manager.register_texture(ibl_diffuse_texture);
-	// texture_manager.register_texture(hdr_texture);
+	BindlessResourceManager bindless_resource_manager(device, gpu_memory_allocator);
+	bindless_resource_manager.register_texture(cubemap_texture);
+
+	bindless_resource_manager.register_texture(ibl_diffuse_texture);
+	bindless_resource_manager.register_texture(hdr_texture);
 	//
 	// texture_manager.unregister_texture(ibl_diffuse_texture);
 	// texture_manager.unregister_texture(hdr_texture);
 	//
 	// texture_manager.register_texture(hdr_texture);
 	// texture_manager.register_texture(ibl_diffuse_texture);
+
+	ID3D12DescriptorHeap* bindless_heaps[] = { bindless_resource_manager.bindless_descriptor_heap.Get()};
 
 	//Setup cube
 	//Note: We render all faces at once, so we really only need one "Face" to rasterize (4 verts, 6 indices)
@@ -474,40 +517,16 @@ int main()
 	
 	Mesh cube(gpu_memory_allocator, cube_vertices, cube_indices);
 
-	ComPtr<ID3D12RootSignature> cubemap_root_signature;
-	{
-		std::array<CD3DX12_ROOT_PARAMETER1,2> root_parameters;
-
-		// Constant Buffer View
-		root_parameters[0].InitAsConstantBufferView(0,0,D3D12_ROOT_DESCRIPTOR_FLAG_NONE,D3D12_SHADER_VISIBILITY_ALL);
-
-		CD3DX12_DESCRIPTOR_RANGE1 range{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0 };
-		
-		root_parameters[1].InitAsDescriptorTable(1, &range);
-		
-		std::array<CD3DX12_STATIC_SAMPLER_DESC,1> samplers;
-		samplers[0].Init(0, D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT);
-		
-		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_signature_desc;
-		root_signature_desc.Init_1_1(static_cast<UINT>(root_parameters.size()), root_parameters.data(),
-									 static_cast<UINT>(samplers.size()), samplers.data(),
-									 D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
-		
-		ComPtr<ID3DBlob> signature_blob, error_blob;
-		HR_CHECK(D3D12SerializeVersionedRootSignature(&root_signature_desc, &signature_blob, &error_blob));
-		HR_CHECK(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(&cubemap_root_signature)));
-	}
-
-	std::vector<DXGI_FORMAT> sphere_to_cube_rtv_formats = { cubemap_format, cubemap_format, cubemap_format,
-													        cubemap_format, cubemap_format, cubemap_format };
+	auto render_to_cubemap_rtv_formats = { cubemap_format, cubemap_format, cubemap_format,
+																	   cubemap_format, cubemap_format, cubemap_format };
 
 	ComPtr<ID3D12PipelineState> spherical_to_cube_pipeline_state = GraphicsPipelineBuilder()
-        .with_root_signature(cubemap_root_signature)
+        .with_root_signature(bindless_root_signature)
         .with_vs(compile_shader(L"data/shaders/render_to_cubemap.hlsl", "vs_main", "vs_5_1"))
         .with_ps(compile_shader(L"data/shaders/render_to_cubemap.hlsl", "ps_main", "ps_5_1"))
         .with_depth_enabled(false)
         .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
-        .with_rtv_formats(sphere_to_cube_rtv_formats)
+        .with_rtv_formats(render_to_cubemap_rtv_formats)
 		.with_debug_name(L"spherical_to_cube_pipeline_state")
         .build(device);
 
@@ -546,10 +565,11 @@ int main()
 	XMVECTOR cube_cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);
 	XMVECTOR cube_cam_up	  = XMVectorSet(0.f, 1.f, 0.f, 0.f);
 
-	SceneConstantBuffer cube_cbuffer_data;
-	cube_cbuffer_data.view = XMMatrixLookAtLH(cube_cam_pos, cube_cam_forward, cube_cam_up);
-	cube_cbuffer_data.proj = XMMatrixIdentity();
-	memcpy(cube_cbuffer_address, &cube_cbuffer_data, sizeof(cube_cbuffer_data));
+	SceneConstantBuffer spherical_to_cube_cbuffer_data;
+	spherical_to_cube_cbuffer_data.view = XMMatrixLookAtLH(cube_cam_pos, cube_cam_forward, cube_cam_up);
+	spherical_to_cube_cbuffer_data.proj = XMMatrixIdentity();
+	spherical_to_cube_cbuffer_data.texture_index = hdr_texture.bindless_index;
+	memcpy(cube_cbuffer_address, &spherical_to_cube_cbuffer_data, sizeof(spherical_to_cube_cbuffer_data));
 
 	//Reset command list using this frame's command allocator
 	HR_CHECK(command_list->Reset(command_allocators[frame_resources.frame_index].Get(), spherical_to_cube_pipeline_state.Get()));
@@ -560,15 +580,16 @@ int main()
 
 	command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-	command_list->SetGraphicsRootSignature(cubemap_root_signature.Get());
-
-	ID3D12DescriptorHeap* cubemap_descriptor_heaps[] = { hdr_texture.texture_descriptor_heap_srv.Get() };
-	command_list->SetDescriptorHeaps(_countof(cubemap_descriptor_heaps), cubemap_descriptor_heaps);
+	command_list->SetGraphicsRootSignature(bindless_root_signature.Get());
+	
+	command_list->SetDescriptorHeaps(_countof(bindless_heaps), bindless_heaps);
 
 	//Slot 0: constant buffer view
 	command_list->SetGraphicsRootConstantBufferView(0, cube_cbuffer->GetGPUVirtualAddress());
-	//Slot 1: hdr texture
-	command_list->SetGraphicsRootDescriptorTable(1, hdr_texture.texture_descriptor_heap_srv->GetGPUDescriptorHandleForHeapStart());
+	//1: bindless texture table
+	command_list->SetGraphicsRootDescriptorTable(1, bindless_resource_manager.get_texture_gpu_handle());
+	//2. bindless cubemap table
+	command_list->SetGraphicsRootDescriptorTable(2, bindless_resource_manager.get_cubemap_gpu_handle());
 
 	D3D12_VIEWPORT cubemap_viewport = {};
 	cubemap_viewport.TopLeftX = 0.0f;
@@ -713,7 +734,7 @@ int main()
 	XMVECTOR cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);
 	XMVECTOR cam_up		 = XMVectorSet(0.f, 1.f, 0.f, 0.f);
 
-	SceneConstantBuffer scene_constant_buffer_data = {};
+	SceneConstantBuffer scene_cbuffer_data = {};
 
 	clock_t time = clock();
 	double accumulated_delta_time = 0.0f;
@@ -722,6 +743,7 @@ int main()
 	POINT last_mouse_pos = {};
 	
 	bool should_close = false;
+	bool vsync_enabled = true;
 	
 	while (!should_close)
 	{	
@@ -765,6 +787,21 @@ int main()
 		//Rendering
 		if (width > 0 && height > 0)
 		{
+			ImGui_ImplDX12_NewFrame();
+			ImGui_ImplWin32_NewFrame();
+			ImGui::NewFrame();
+
+			//ImGui Code goes here
+
+			ImGui::ShowDemoWindow();
+
+			ImGui::Checkbox("vsync", &vsync_enabled);
+
+			static float DraggableFloat = 0.0f;
+			ImGui::SliderFloat("DraggableFloat", &DraggableFloat, 0.0f, 1.0f);
+
+			ImGui::Render();
+
 			{	//Camera Control
 				const XMVECTOR cam_right = XMVector3Normalize(XMVector3Cross(cam_up, cam_forward));
 				
@@ -795,15 +832,16 @@ int main()
 			}
 
 			XMVECTOR target = cam_pos + cam_forward;
-			scene_constant_buffer_data.view = XMMatrixLookAtLH(cam_pos, target, cam_up);
+			scene_cbuffer_data.view = XMMatrixLookAtLH(cam_pos, target, cam_up);
 
 			float fov_y = 45.0f;// * XM_PI / 180.0f;
 			float aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
-			scene_constant_buffer_data.proj = XMMatrixPerspectiveFovLH(fov_y, aspect_ratio, 0.01f, 100000.0f);
+			scene_cbuffer_data.proj = XMMatrixPerspectiveFovLH(fov_y, aspect_ratio, 0.01f, 100000.0f);
 			
-			scene_constant_buffer_data.cam_pos = cam_pos;
-			scene_constant_buffer_data.cam_dir = cam_forward;
-			memcpy(cbv_gpu_addresses[frame_resources.frame_index], &scene_constant_buffer_data, sizeof(scene_constant_buffer_data));
+			scene_cbuffer_data.cam_pos = cam_pos;
+			scene_cbuffer_data.cam_dir = cam_forward;
+			scene_cbuffer_data.texture_index = cubemap_texture.bindless_index;
+			memcpy(cbv_gpu_addresses[frame_resources.frame_index], &scene_cbuffer_data, sizeof(scene_cbuffer_data));
 
 			HR_CHECK(command_allocators[frame_resources.frame_index]->Reset());
 
@@ -864,20 +902,24 @@ int main()
 				command_list->SetPipelineState(skybox_pipeline_state.Get());
 				command_list->SetGraphicsRootSignature(bindless_root_signature.Get());
 
-				ID3D12DescriptorHeap* bindless_heaps[] = { texture_manager.bindless_descriptor_heap.Get()};
 				command_list->SetDescriptorHeaps(_countof(bindless_heaps), bindless_heaps);
 
 				//0: Cbuffer
 				command_list->SetGraphicsRootConstantBufferView(0, constant_buffers[frame_resources.frame_index]->GetGPUVirtualAddress());
 				//1: bindless texture table
-				command_list->SetGraphicsRootDescriptorTable(1, texture_manager.get_texture_gpu_handle());
+				command_list->SetGraphicsRootDescriptorTable(1, bindless_resource_manager.get_texture_gpu_handle());
 				//2. bindless cubemap table
-				command_list->SetGraphicsRootDescriptorTable(2, texture_manager.get_cubemap_gpu_handle());
+				command_list->SetGraphicsRootDescriptorTable(2, bindless_resource_manager.get_cubemap_gpu_handle());
 
 				command_list->IASetVertexBuffers(0, 1, &cube.vertex_buffer_view);
 				command_list->IASetIndexBuffer(&cube.index_buffer_view);
 				command_list->DrawIndexedInstanced(cube.index_count(), 1, 0, 0, 0);
 			}
+
+
+			ID3D12DescriptorHeap* imgui_heaps[] = { imgui_descriptor_heap.Get() };
+			command_list->SetDescriptorHeaps(_countof(imgui_heaps), imgui_heaps);
+			ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), command_list.Get());
 			
 			// Indicate that the back buffer will now be used to present.
 			auto rt_to_present_barrier = CD3DX12_RESOURCE_BARRIER::Transition(frame_resources.render_targets[frame_resources.frame_index].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
@@ -890,7 +932,6 @@ int main()
 			command_queue->ExecuteCommandLists(_countof(pp_command_lists), pp_command_lists);
 
 			// Present the frame.
-			const bool vsync_enabled = true;
 			const UINT sync_interval = vsync_enabled ? 1 : 0;
 			HR_CHECK(frame_resources.swapchain->Present(sync_interval, 0));
 
@@ -909,7 +950,7 @@ int main()
 
 	
 	{ //Free all memory allocated with D3D12 Memory Allocator
-		texture_manager.release();
+		bindless_resource_manager.release();
 
 		ibl_diffuse_texture.release();
 		hdr_texture.release();
@@ -931,6 +972,10 @@ int main()
 	}
 
 	gpu_memory_allocator->Release();
+
+	ImGui_ImplDX12_Shutdown();
+	ImGui_ImplWin32_Shutdown();
+	ImGui::DestroyContext();
 	
 	return 0;
 }

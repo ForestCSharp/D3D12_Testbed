@@ -25,3 +25,6 @@ ipch
 #IDE folders
 .idea/
 .vs/
+
+#ImGui
+imgui.ini
