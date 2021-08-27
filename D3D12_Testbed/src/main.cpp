@@ -44,7 +44,6 @@ struct SceneConstantBuffer
 	XMMATRIX proj;
 	XMVECTOR cam_pos;
 	XMVECTOR cam_dir;
-	UINT	 texture_index;
 };
 
 struct InstanceConstantBuffer
@@ -57,10 +56,11 @@ struct InstanceConstantBuffer
 template <typename T>
 struct TConstantBuffer
 {
-	// T data;
 	ComPtr<ID3D12Resource> resource;
-	D3D12MA::Allocation* allocation;
-	T* data_ptr;
+	D3D12MA::Allocation* allocation = nullptr;
+	T* data_ptr = nullptr;
+
+	TConstantBuffer() = default; //TODO: for std::array in TPerFrameConstantBuffer
 	
 	explicit TConstantBuffer(D3D12MA::Allocator* gpu_memory_allocator)
 	{
@@ -108,6 +108,40 @@ struct TConstantBuffer
 		if (allocation)
 		{
 			allocation->Release();
+		}
+	}
+};
+
+template <typename T, size_t Count>
+struct TPerFrameConstantBuffer
+{
+	array<TConstantBuffer<T>, Count> constant_buffers;
+	
+	explicit TPerFrameConstantBuffer(D3D12MA::Allocator* gpu_memory_allocator)
+	{
+		for (size_t i = 0; i < Count; ++i)
+		{
+			constant_buffers[i] = TConstantBuffer<T>(gpu_memory_allocator);
+		}
+	}
+
+	T& data(size_t index)
+	{
+		assert(index < constant_buffers.size());
+		return constant_buffers[index].data();
+	}
+
+	D3D12_GPU_VIRTUAL_ADDRESS get_gpu_virtual_address(size_t index) const
+	{
+		assert(index < constant_buffers.size());
+		return constant_buffers[index].get_gpu_virtual_address();
+	}
+
+	void release() const
+	{
+		for (size_t i = 0; i < Count; ++i)
+		{
+			constant_buffers[i].release();
 		}
 	}
 };
@@ -432,38 +466,14 @@ int main()
 
 	FrameResources frame_resources(width, height, factory, device, gpu_memory_allocator, command_queue, window);
 
-	// // 8. Create our (empty) root signature, which describes resources to be used when running work on the GPU
-	// ComPtr<ID3D12RootSignature> root_signature;
-	// {
-	// 	std::array<CD3DX12_ROOT_PARAMETER1,2> root_parameters;
-	//
-	// 	// Constant Buffer View
-	// 	root_parameters[0].InitAsConstantBufferView(0,0,D3D12_ROOT_DESCRIPTOR_FLAG_NONE,D3D12_SHADER_VISIBILITY_ALL);
-	//
-	// 	CD3DX12_DESCRIPTOR_RANGE1 range{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0 };
-	// 	
-	// 	root_parameters[1].InitAsDescriptorTable(1, &range);
-	// 	
-	// 	std::array<CD3DX12_STATIC_SAMPLER_DESC,1> samplers;
-	// 	samplers[0].Init(0, D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT);
-	// 	
-	// 	CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_signature_desc;
-	// 	root_signature_desc.Init_1_1(static_cast<UINT>(root_parameters.size()), root_parameters.data(),
-	// 								 static_cast<UINT>(samplers.size()), samplers.data(),
-	// 								 D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
-	// 	
-	// 	ComPtr<ID3DBlob> signature_blob, error_blob;
-	// 	HR_CHECK(D3D12SerializeVersionedRootSignature(&root_signature_desc, &signature_blob, &error_blob));
-	// 	HR_CHECK(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(&root_signature)));
-	// }
-
-	//TODO: Helpers for this in BindlessResourceManager
+	//TODO: Helpers for this in BindlessResourceManager?
 	ComPtr<ID3D12RootSignature> bindless_root_signature;
 	{
-		std::array<CD3DX12_ROOT_PARAMETER1, 3> root_parameters;
+		array<CD3DX12_ROOT_PARAMETER1, 4> root_parameters;
 
 		// Constant Buffer View
 		root_parameters[0].InitAsConstantBufferView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_ALL);
+		root_parameters[1].InitAsConstantBufferView(1, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_ALL);
 
 		// Bindless resources (texture2Ds)
 		D3D12_DESCRIPTOR_RANGE1 texture_range = {};
@@ -473,7 +483,7 @@ int main()
 		texture_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
 		texture_range.RegisterSpace = TEXTURE_2D_REGISTER_SPACE;
 		texture_range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
-		root_parameters[1].InitAsDescriptorTable(1, &texture_range);
+		root_parameters[2].InitAsDescriptorTable(1, &texture_range);
 
 		// Bindless Resources (cubemaps)
 		D3D12_DESCRIPTOR_RANGE1 cube_range = {};
@@ -483,7 +493,7 @@ int main()
 		cube_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
 		cube_range.RegisterSpace = TEXTURE_CUBE_REGISTER_SPACE;
 		cube_range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
-		root_parameters[2].InitAsDescriptorTable(1, &cube_range);
+		root_parameters[3].InitAsDescriptorTable(1, &cube_range);
 
 		std::array<CD3DX12_STATIC_SAMPLER_DESC, 1> samplers;
 		samplers[0].Init(0, D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT);
@@ -595,16 +605,18 @@ int main()
 		.with_debug_name(L"spherical_to_cube_pipeline_state")
         .build(device);
 
-	TConstantBuffer<SceneConstantBuffer> spherical_to_cube_constant_buffer(gpu_memory_allocator);
+	TConstantBuffer<SceneConstantBuffer> spherical_to_cube_scene(gpu_memory_allocator);
+	TConstantBuffer<InstanceConstantBuffer> spherical_to_cube_instance(gpu_memory_allocator);
 
 	XMVECTOR cube_cam_pos	  = XMVectorSet(0.f, 0.f, 0.f, 1.f);
 	XMVECTOR cube_cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);
 	XMVECTOR cube_cam_up	  = XMVectorSet(0.f, 1.f, 0.f, 0.f);
 
-	SceneConstantBuffer& spherical_to_cube_cbuffer_data = spherical_to_cube_constant_buffer.data();
+	SceneConstantBuffer& spherical_to_cube_cbuffer_data = spherical_to_cube_scene.data();
 	spherical_to_cube_cbuffer_data.view = XMMatrixLookAtLH(cube_cam_pos, cube_cam_forward, cube_cam_up);
 	spherical_to_cube_cbuffer_data.proj = XMMatrixIdentity();
-	spherical_to_cube_cbuffer_data.texture_index = hdr_texture.bindless_index;
+	
+	spherical_to_cube_instance.data().texture_index = hdr_texture.bindless_index;
 
 	//Reset command list using this frame's command allocator
 	HR_CHECK(command_list->Reset(command_allocators[frame_resources.frame_index].Get(), spherical_to_cube_pipeline_state.Get()));
@@ -619,12 +631,14 @@ int main()
 	
 	command_list->SetDescriptorHeaps(_countof(bindless_heaps), bindless_heaps);
 
-	//Slot 0: constant buffer view
-	command_list->SetGraphicsRootConstantBufferView(0, spherical_to_cube_constant_buffer.get_gpu_virtual_address());
-	//1: bindless texture table
-	command_list->SetGraphicsRootDescriptorTable(1, bindless_resource_manager.get_texture_gpu_handle());
-	//2. bindless cubemap table
-	command_list->SetGraphicsRootDescriptorTable(2, bindless_resource_manager.get_cubemap_gpu_handle());
+	//Slot 0: scene cbuffer
+	command_list->SetGraphicsRootConstantBufferView(0, spherical_to_cube_scene.get_gpu_virtual_address());
+	//Slot 1: instance cbuffer
+	command_list->SetGraphicsRootConstantBufferView(1, spherical_to_cube_instance.get_gpu_virtual_address());
+	//Slot 2: bindless texture table
+	command_list->SetGraphicsRootDescriptorTable(2, bindless_resource_manager.get_texture_gpu_handle());
+	//Slot 3: bindless cubemap table
+	command_list->SetGraphicsRootDescriptorTable(3, bindless_resource_manager.get_cubemap_gpu_handle());
 
 	D3D12_VIEWPORT cubemap_viewport = {};
 	cubemap_viewport.TopLeftX = 0.0f;
@@ -653,7 +667,9 @@ int main()
 	command_queue->ExecuteCommandLists(1, &p_cmd_list);
 	wait_gpu_idle(device, command_queue);
 
-	spherical_to_cube_constant_buffer.release();
+	//TODO: Reuse these for convolute
+	spherical_to_cube_scene.release();
+	spherical_to_cube_instance.release();
 
 	GltfAsset gltf_asset;
 	if (!gltf_load_asset("data/meshes/sphere.glb", &gltf_asset))
@@ -722,17 +738,22 @@ int main()
 		meshes.emplace_back(Mesh(gpu_memory_allocator, vertices, indices));
 	}
 
-	std::vector<TConstantBuffer<SceneConstantBuffer>> scene_constant_buffers;
-	for (uint32_t i = 0; i < backbuffer_count; ++i)
+	TPerFrameConstantBuffer<SceneConstantBuffer, backbuffer_count> scene_constant_buffers(gpu_memory_allocator);
+
+	//Eventually these will hold per-frame data (transform, etc.)
+	TPerFrameConstantBuffer<InstanceConstantBuffer, backbuffer_count> mesh_constant_buffers(gpu_memory_allocator);
+	TPerFrameConstantBuffer<InstanceConstantBuffer, backbuffer_count> skybox_constant_buffers(gpu_memory_allocator);
+
+	//fill texture indices on instance data
+	for (size_t i = 0; i < backbuffer_count; ++i)
 	{
-		scene_constant_buffers.push_back(std::move(TConstantBuffer<SceneConstantBuffer>(gpu_memory_allocator)));
+		mesh_constant_buffers.data(i).texture_index = ibl_diffuse_texture.bindless_index;
+		skybox_constant_buffers.data(i).texture_index = cubemap_texture.bindless_index;
 	}
 
 	XMVECTOR cam_pos	 = XMVectorSet(0.f, -10.f, 30.f, 1.f);
 	XMVECTOR cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);
 	XMVECTOR cam_up		 = XMVectorSet(0.f, 1.f, 0.f, 0.f);
-
-	// SceneConstantBuffer scene_cbuffer_data = {};
 
 	clock_t time = clock();
 	double accumulated_delta_time = 0.0f;
@@ -831,19 +852,17 @@ int main()
 				}
 			}
 
-			auto& current_scene_cbuffer = scene_constant_buffers[frame_resources.frame_index];
+			SceneConstantBuffer& scene_cbuffer_data = scene_constant_buffers.data(frame_resources.frame_index);
 
 			XMVECTOR target = cam_pos + cam_forward;
-			current_scene_cbuffer.data().view = XMMatrixLookAtLH(cam_pos, target, cam_up);
+			scene_cbuffer_data.view = XMMatrixLookAtLH(cam_pos, target, cam_up);
 
-			float fov_y = 45.0f;// * XM_PI / 180.0f;
+			float fov_y = 45.0f;
 			float aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
-			current_scene_cbuffer.data().proj = XMMatrixPerspectiveFovLH(fov_y, aspect_ratio, 0.01f, 100000.0f);
+			scene_cbuffer_data.proj = XMMatrixPerspectiveFovLH(fov_y, aspect_ratio, 0.01f, 100000.0f);
 			
-			current_scene_cbuffer.data().cam_pos = cam_pos;
-			current_scene_cbuffer.data().cam_dir = cam_forward;
-			current_scene_cbuffer.data().texture_index = cubemap_texture.bindless_index;
-			// memcpy(cbv_gpu_addresses[frame_resources.frame_index], &scene_cbuffer_data, sizeof(scene_cbuffer_data));
+			scene_cbuffer_data.cam_pos = cam_pos;
+			scene_cbuffer_data.cam_dir = cam_forward;
 
 			HR_CHECK(command_allocators[frame_resources.frame_index]->Reset());
 
@@ -854,12 +873,14 @@ int main()
 
 			command_list->SetDescriptorHeaps(_countof(bindless_heaps), bindless_heaps);
 
-			//0: Cbuffer
-			command_list->SetGraphicsRootConstantBufferView(0, current_scene_cbuffer.get_gpu_virtual_address());
-			//1: bindless texture table
-			command_list->SetGraphicsRootDescriptorTable(1, bindless_resource_manager.get_texture_gpu_handle());
-			//2. bindless cubemap table
-			command_list->SetGraphicsRootDescriptorTable(2, bindless_resource_manager.get_cubemap_gpu_handle());
+			//Slot 0: scene cbuffer
+			command_list->SetGraphicsRootConstantBufferView(0, scene_constant_buffers.get_gpu_virtual_address(frame_resources.frame_index));
+			//Slot 1: instance cbuffer
+			command_list->SetGraphicsRootConstantBufferView(1, mesh_constant_buffers.get_gpu_virtual_address(frame_resources.frame_index));
+			//Slot 2: bindless texture table
+			command_list->SetGraphicsRootDescriptorTable(2, bindless_resource_manager.get_texture_gpu_handle());
+			//Slot 3: bindless cubemap table
+			command_list->SetGraphicsRootDescriptorTable(3, bindless_resource_manager.get_cubemap_gpu_handle());
 
 			D3D12_VIEWPORT viewport = {};
 			viewport.TopLeftX = 0.0f;
@@ -903,8 +924,8 @@ int main()
 				//Set Pipeline State
 				command_list->SetPipelineState(skybox_pipeline_state.Get());
 
-				// //0: Cbuffer //TODO: Skybox cbuffer (only working currently because our cubemap + env indices are identical
-				// command_list->SetGraphicsRootConstantBufferView(0, constant_buffers[frame_resources.frame_index]->GetGPUVirtualAddress());
+				// Skybox instance cbuffer (only working currently because our cubemap + env indices are identical
+				command_list->SetGraphicsRootConstantBufferView(1, skybox_constant_buffers.get_gpu_virtual_address(frame_resources.frame_index));
 
 				command_list->IASetVertexBuffers(0, 1, &cube.vertex_buffer_view);
 				command_list->IASetIndexBuffer(&cube.index_buffer_view);
@@ -941,7 +962,7 @@ int main()
 
 	wait_gpu_idle(device, command_queue);
 
-	printf("FPS: %f", static_cast<float>(frames_rendered) / accumulated_delta_time);
+	printf("FPS: %f\n", static_cast<float>(frames_rendered) / accumulated_delta_time);
 
 	
 	{ //Free all memory allocated with D3D12 Memory Allocator
@@ -958,10 +979,9 @@ int main()
 
 		cube.release();
 
-		for (UINT i = 0; i < backbuffer_count; ++i)
-		{
-			scene_constant_buffers[i].release();
-		}
+		scene_constant_buffers.release();
+		mesh_constant_buffers.release();
+		skybox_constant_buffers.release();
 
 		frame_resources.depth_texture_allocation->Release();
 	}

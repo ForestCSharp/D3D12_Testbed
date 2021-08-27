@@ -1,5 +1,6 @@
 
 #include "scene.hlsl"
+#include "instance.hlsl"
 #include "bindless.hlsl"
 
 //Testing Equirectangular Sampling

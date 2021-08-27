@@ -1,5 +1,6 @@
 
 #include "scene.hlsl"
+#include "instance.hlsl"
 #include "bindless.hlsl"
 
 SamplerState hdr_sampler : register(s0);
