@@ -1,3 +1,4 @@
+#include "math.hlsl"
 #include "brdf.hlsl"
 
 #include "scene.hlsl"
@@ -26,14 +27,6 @@ float4 sample_environment_map(const float3 v)
     const float3 color = Texture2DTable[texture_index].Sample(hdr_sampler, uv).rgb;
     return float4(color, 1);
 }
-
-static matrix identity =
-{
-    { 1, 0, 0, 0 },
-    { 0, 1, 0, 0 },
-    { 0, 0, 1, 0 },
-    { 0, 0, 0, 1 }
-};
 
 float4x4 m_translate(const float3 v)
 {

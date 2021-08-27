@@ -1,3 +1,4 @@
+#include "math.hlsl"
 
 #include "scene.hlsl"
 #include "instance.hlsl"
@@ -21,14 +22,6 @@ float4 sample_spherical_map(const float3 v)
     const float3 color = Texture2DTable[texture_index].Sample(hdr_sampler, uv).rgb;
     return float4(color, 1);
 }
-
-static matrix identity =
-{
-    { 1, 0, 0, 0 },
-    { 0, 1, 0, 0 },
-    { 0, 0, 1, 0 },
-    { 0, 0, 0, 1 }
-};
 
 struct PsInput
 {
@@ -67,28 +60,6 @@ struct PsOutput
     float4 left: SV_Target4;
     float4 right: SV_Target5;
 };
-
-float3x3 angle_axis_3x3(float angle, float3 axis)
-{
-    float c, s;
-    sincos(angle, s, c);
-
-    float t = 1 - c;
-    float x = axis.x;
-    float y = axis.y;
-    float z = axis.z;
-
-    return float3x3(
-        t * x * x + c,      t * x * y - s * z,  t * x * z + s * y,
-        t * x * y + s * z,  t * y * y + c,      t * y * z - s * x,
-        t * x * z - s * y,  t * y * z + s * x,  t * z * z + c
-    );
-}
-
-float3 float3_rotate_angle_axis(float3 in_vector, float3 axis, float in_degrees)
-{
-    return mul(angle_axis_3x3(radians(in_degrees), axis), in_vector);
-}
 
 PsOutput ps_main(const PsInput input) : SV_TARGET
 {

@@ -316,6 +316,8 @@ struct Texture
 	}
 };
 
+//FCS TODO: bindless samplers?
+
 constexpr UINT BINDLESS_TABLE_SIZE		   = 10000;
 constexpr UINT BINDLESS_DESC_TYPES		   = 2;
 constexpr UINT TEXTURE_2D_REGISTER_SPACE   = 1;
@@ -489,3 +491,5 @@ struct BindlessResourceManager
 		return out_handle;
 	}
 };
+
+// TODO: Tests for BindlessResourceManager (registering/unregistering)

@@ -1,29 +1,12 @@
+#include "math.hlsl"
 
 #include "scene.hlsl"
 #include "instance.hlsl"
 #include "bindless.hlsl"
 
+
 //Testing Equirectangular Sampling
 SamplerState      cubemap_sampler : register(s0);
-
-static matrix identity =
-{
-    { 1, 0, 0, 0 },
-    { 0, 1, 0, 0 },
-    { 0, 0, 1, 0 },
-    { 0, 0, 0, 1 }
-};
-
-float4x4 uniform_scale(float scalar)
-{
-    return float4x4
-    (
-        scalar, 0,      0,      0,
-        0,      scalar, 0,      0,
-        0,      0,      scalar, 0,
-        0,      0,      0,      1
-    );
-}
 
 struct PsInput
 {
@@ -35,7 +18,7 @@ PsInput vs_main(const float3 position : POSITION, const float3 normal : NORMAL, 
 {
     PsInput result;
     
-    const float4x4 model = uniform_scale(5000);
+    const float4x4 model = matrix_uniform_scale(5000);
 
     //Calculate world pos separately, as we pass it to the pixel shader as well
     const float4 world_pos = mul(model, float4(position, 1.0f));

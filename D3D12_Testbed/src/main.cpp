@@ -469,37 +469,36 @@ int main()
 	//TODO: Helpers for this in BindlessResourceManager?
 	ComPtr<ID3D12RootSignature> bindless_root_signature;
 	{
-		array<CD3DX12_ROOT_PARAMETER1, 4> root_parameters;
+		array<CD3DX12_ROOT_PARAMETER, 4> root_parameters;
 
 		// Constant Buffer View
-		root_parameters[0].InitAsConstantBufferView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_ALL);
-		root_parameters[1].InitAsConstantBufferView(1, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_ALL);
+		root_parameters[0].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_ALL);
+		
+		root_parameters[1].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_ALL);
 
 		// Bindless resources (texture2Ds)
-		D3D12_DESCRIPTOR_RANGE1 texture_range = {};
+		D3D12_DESCRIPTOR_RANGE texture_range = {};
 		texture_range.BaseShaderRegister = 0;
 		texture_range.NumDescriptors = BINDLESS_TABLE_SIZE;
 		texture_range.OffsetInDescriptorsFromTableStart = 0;
 		texture_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
 		texture_range.RegisterSpace = TEXTURE_2D_REGISTER_SPACE;
-		texture_range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
 		root_parameters[2].InitAsDescriptorTable(1, &texture_range);
 
 		// Bindless Resources (cubemaps)
-		D3D12_DESCRIPTOR_RANGE1 cube_range = {};
+		D3D12_DESCRIPTOR_RANGE cube_range = {};
 		cube_range.BaseShaderRegister = 0;
 		cube_range.NumDescriptors = BINDLESS_TABLE_SIZE;
 		cube_range.OffsetInDescriptorsFromTableStart = 0;
 		cube_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
 		cube_range.RegisterSpace = TEXTURE_CUBE_REGISTER_SPACE;
-		cube_range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
 		root_parameters[3].InitAsDescriptorTable(1, &cube_range);
 
 		std::array<CD3DX12_STATIC_SAMPLER_DESC, 1> samplers;
 		samplers[0].Init(0, D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT);
 
 		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_signature_desc;
-		root_signature_desc.Init_1_1(static_cast<UINT>(root_parameters.size()), root_parameters.data(),
+		root_signature_desc.Init_1_0(static_cast<UINT>(root_parameters.size()), root_parameters.data(),
             static_cast<UINT>(samplers.size()), samplers.data(),
             D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
@@ -508,7 +507,6 @@ int main()
 		HR_CHECK(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(&bindless_root_signature)));
 	}
 
-	// 9. Compile our vertex and pixel shaders
 	ComPtr<ID3D12PipelineState> pipeline_state = GraphicsPipelineBuilder()
 		.with_root_signature(bindless_root_signature)
 		.with_vs(compile_shader(L"data/shaders/pbr.hlsl", "vs_main", "vs_5_1"))
@@ -538,30 +536,31 @@ int main()
 	HR_CHECK(command_list->Close());
 
 	//Load Environment Map
-	//TODO: remove this once we get our cubemap convolved
-	Texture ibl_diffuse_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, "data/hdr/Frozen_Waterfall_Env.hdr");
-	ibl_diffuse_texture.set_name(TEXT("Filtered Env Map (equirectangular)"));
+	//TODO: remove this once we're sampling ibl_cubemap_texture
+	Texture ibl_equirectangular_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, "data/hdr/Frozen_Waterfall_Env.hdr");
+	ibl_equirectangular_texture.set_name(TEXT("Filtered Env Map (equirectangular)"));
 
-	Texture hdr_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, "data/hdr/Frozen_Waterfall_Ref.hdr");
-	hdr_texture.set_name(TEXT("Env Map (equirectangular)"));
+	Texture hdr_equirectangular_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, "data/hdr/Frozen_Waterfall_Ref.hdr");
+	hdr_equirectangular_texture.set_name(TEXT("Env Map (equirectangular)"));
 
-	const UINT cube_size = 512;
+	const UINT hdr_cube_size = 1024;
 	DXGI_FORMAT cubemap_format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-	Texture cubemap_texture(device, gpu_memory_allocator, cubemap_format, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, cube_size, cube_size, 6);
-	cubemap_texture.set_name(TEXT("Cubemap Texture"));
-	cubemap_texture.create_cubemap_srv(device);
+	Texture hdr_cubemap_texture(device, gpu_memory_allocator, cubemap_format, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, hdr_cube_size, hdr_cube_size, 6);
+	hdr_cubemap_texture.set_name(TEXT("HDR Cubemap Texture"));
+	hdr_cubemap_texture.create_cubemap_srv(device);
+
+	const UINT ibl_cube_size = 16;
+	Texture ibl_cubemap_texture(device, gpu_memory_allocator, cubemap_format, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, ibl_cube_size, ibl_cube_size, 6);
+	ibl_cubemap_texture.set_name(TEXT("IBL Cubemap Texture"));
+	ibl_cubemap_texture.create_cubemap_srv(device);
 
 	BindlessResourceManager bindless_resource_manager(device, gpu_memory_allocator);
-	bindless_resource_manager.register_texture(cubemap_texture);
 
-	bindless_resource_manager.register_texture(ibl_diffuse_texture);
-	bindless_resource_manager.register_texture(hdr_texture);
+	bindless_resource_manager.register_texture(hdr_cubemap_texture);
+	bindless_resource_manager.register_texture(ibl_cubemap_texture);
 
-	// texture_manager.unregister_texture(ibl_diffuse_texture);
-	// texture_manager.unregister_texture(hdr_texture);
-	//
-	// texture_manager.register_texture(hdr_texture);
-	// texture_manager.register_texture(ibl_diffuse_texture);
+	bindless_resource_manager.register_texture(ibl_equirectangular_texture);
+	bindless_resource_manager.register_texture(hdr_equirectangular_texture);
 
 	ID3D12DescriptorHeap* bindless_heaps[] = { bindless_resource_manager.bindless_descriptor_heap.Get()};
 
@@ -605,8 +604,19 @@ int main()
 		.with_debug_name(L"spherical_to_cube_pipeline_state")
         .build(device);
 
+	ComPtr<ID3D12PipelineState> convolute_cubemap_pipeline_state = GraphicsPipelineBuilder()
+	    .with_root_signature(bindless_root_signature)
+	    .with_vs(compile_shader(L"data/shaders/convolute_cubemap.hlsl", "vs_main", "vs_5_1"))
+	    .with_ps(compile_shader(L"data/shaders/convolute_cubemap.hlsl", "ps_main", "ps_5_1"))
+	    .with_depth_enabled(false)
+	    .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
+	    .with_rtv_formats(render_to_cubemap_rtv_formats)
+	    .with_debug_name(L"convolute_cubemap_pipeline_state")
+	    .build(device);
+
 	TConstantBuffer<SceneConstantBuffer> spherical_to_cube_scene(gpu_memory_allocator);
 	TConstantBuffer<InstanceConstantBuffer> spherical_to_cube_instance(gpu_memory_allocator);
+	TConstantBuffer<InstanceConstantBuffer> convolute_cube_instance(gpu_memory_allocator);
 
 	XMVECTOR cube_cam_pos	  = XMVectorSet(0.f, 0.f, 0.f, 1.f);
 	XMVECTOR cube_cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);
@@ -616,60 +626,95 @@ int main()
 	spherical_to_cube_cbuffer_data.view = XMMatrixLookAtLH(cube_cam_pos, cube_cam_forward, cube_cam_up);
 	spherical_to_cube_cbuffer_data.proj = XMMatrixIdentity();
 	
-	spherical_to_cube_instance.data().texture_index = hdr_texture.bindless_index;
+	spherical_to_cube_instance.data().texture_index = hdr_equirectangular_texture.bindless_index;
+	convolute_cube_instance.data().texture_index = hdr_cubemap_texture.bindless_index;
 
 	//Reset command list using this frame's command allocator
-	HR_CHECK(command_list->Reset(command_allocators[frame_resources.frame_index].Get(), spherical_to_cube_pipeline_state.Get()));
+	HR_CHECK(command_list->Reset(command_allocators[backbuffer_count - 1].Get(), spherical_to_cube_pipeline_state.Get()));
 
-	auto cubemap_rt_barrier = CD3DX12_RESOURCE_BARRIER::Transition(cubemap_texture.resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
-	command_list->ResourceBarrier(1, &cubemap_rt_barrier);
-	command_list->OMSetRenderTargets(static_cast<UINT>(cubemap_texture.rtv_handles.size()), cubemap_texture.rtv_handles.data(), FALSE, nullptr);
+	//Begin Equirectangular to Cubemap
+	{
+		auto hdr_cubemap_rt_barrier = CD3DX12_RESOURCE_BARRIER::Transition(hdr_cubemap_texture.resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+		command_list->ResourceBarrier(1, &hdr_cubemap_rt_barrier);
+		command_list->OMSetRenderTargets(static_cast<UINT>(hdr_cubemap_texture.rtv_handles.size()), hdr_cubemap_texture.rtv_handles.data(), FALSE, nullptr);
 
-	command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-	command_list->SetGraphicsRootSignature(bindless_root_signature.Get());
+		command_list->SetGraphicsRootSignature(bindless_root_signature.Get());
 	
-	command_list->SetDescriptorHeaps(_countof(bindless_heaps), bindless_heaps);
+		command_list->SetDescriptorHeaps(_countof(bindless_heaps), bindless_heaps);
 
-	//Slot 0: scene cbuffer
-	command_list->SetGraphicsRootConstantBufferView(0, spherical_to_cube_scene.get_gpu_virtual_address());
-	//Slot 1: instance cbuffer
-	command_list->SetGraphicsRootConstantBufferView(1, spherical_to_cube_instance.get_gpu_virtual_address());
-	//Slot 2: bindless texture table
-	command_list->SetGraphicsRootDescriptorTable(2, bindless_resource_manager.get_texture_gpu_handle());
-	//Slot 3: bindless cubemap table
-	command_list->SetGraphicsRootDescriptorTable(3, bindless_resource_manager.get_cubemap_gpu_handle());
+		//Slot 0: scene cbuffer
+		command_list->SetGraphicsRootConstantBufferView(0, spherical_to_cube_scene.get_gpu_virtual_address());
+		//Slot 1: instance cbuffer
+		command_list->SetGraphicsRootConstantBufferView(1, spherical_to_cube_instance.get_gpu_virtual_address());
+		//Slot 2: bindless texture table
+		command_list->SetGraphicsRootDescriptorTable(2, bindless_resource_manager.get_texture_gpu_handle());
+		//Slot 3: bindless cubemap table
+		command_list->SetGraphicsRootDescriptorTable(3, bindless_resource_manager.get_cubemap_gpu_handle());
 
-	D3D12_VIEWPORT cubemap_viewport = {};
-	cubemap_viewport.TopLeftX = 0.0f;
-	cubemap_viewport.TopLeftY = 0.0f;
-	cubemap_viewport.Width = static_cast<float>(cube_size);
-	cubemap_viewport.Height = static_cast<float>(cube_size);
-	cubemap_viewport.MinDepth = 0.0f;
-	cubemap_viewport.MaxDepth = 1.0f;
-	command_list->RSSetViewports(1, &cubemap_viewport);
+		D3D12_VIEWPORT viewport = {};
+		viewport.TopLeftX = 0.0f;
+		viewport.TopLeftY = 0.0f;
+		viewport.Width = static_cast<float>(hdr_cube_size);
+		viewport.Height = static_cast<float>(hdr_cube_size);
+		viewport.MinDepth = 0.0f;
+		viewport.MaxDepth = 1.0f;
+		command_list->RSSetViewports(1, &viewport);
 
-	const D3D12_RECT cubemap_scissor_rect = { 0, 0, static_cast<LONG>(cube_size), static_cast<LONG>(cube_size) };
-	command_list->RSSetScissorRects(1, &cubemap_scissor_rect);
+		const D3D12_RECT scissor_rect = { 0, 0, static_cast<LONG>(hdr_cube_size), static_cast<LONG>(hdr_cube_size) };
+		command_list->RSSetScissorRects(1, &scissor_rect);
 
-	command_list->IASetVertexBuffers(0, 1, &cube.vertex_buffer_view);
-	command_list->IASetIndexBuffer(&cube.index_buffer_view);
-	command_list->DrawIndexedInstanced(cube.index_count(), 1, 0, 0, 0);
+		command_list->IASetVertexBuffers(0, 1, &cube.vertex_buffer_view);
+		command_list->IASetIndexBuffer(&cube.index_buffer_view);
+		command_list->DrawIndexedInstanced(cube.index_count(), 1, 0, 0, 0);
 
-	auto cubemap_pixel_shader_barrier = CD3DX12_RESOURCE_BARRIER::Transition(cubemap_texture.resource.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-	command_list->ResourceBarrier(1, &cubemap_pixel_shader_barrier);
+		auto hdr_cubemap_pixel_shader_barrier = CD3DX12_RESOURCE_BARRIER::Transition(hdr_cubemap_texture.resource.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+		command_list->ResourceBarrier(1, &hdr_cubemap_pixel_shader_barrier);
+	}
 
-	//TODO: use our cubemap as a pixel shader resource and convolute it
+	//Begin Convolution
+	{
+		auto ibl_cubemap_rt_barrier = CD3DX12_RESOURCE_BARRIER::Transition(ibl_cubemap_texture.resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+		command_list->ResourceBarrier(1, &ibl_cubemap_rt_barrier);
+	
+		//convolution pipeline
+		command_list->SetPipelineState(convolute_cubemap_pipeline_state.Get());
+
+		//Slot 1: convolution instance cbuffer
+		command_list->SetGraphicsRootConstantBufferView(1, convolute_cube_instance.get_gpu_virtual_address());
+
+		command_list->OMSetRenderTargets(static_cast<UINT>(ibl_cubemap_texture.rtv_handles.size()), ibl_cubemap_texture.rtv_handles.data(), FALSE, nullptr);
+
+		D3D12_VIEWPORT viewport = {};
+		viewport.TopLeftX = 0.0f;
+		viewport.TopLeftY = 0.0f;
+		viewport.Width = static_cast<float>(ibl_cube_size);
+		viewport.Height = static_cast<float>(ibl_cube_size);
+		viewport.MinDepth = 0.0f;
+		viewport.MaxDepth = 1.0f;
+		command_list->RSSetViewports(1, &viewport);
+
+		const D3D12_RECT scissor_rect = { 0, 0, static_cast<LONG>(ibl_cube_size), static_cast<LONG>(ibl_cube_size) };
+		command_list->RSSetScissorRects(1, &scissor_rect);
+
+		//TODO: This is likely causing too long of a GPU hang, causing us to lose device.
+		command_list->DrawIndexedInstanced(cube.index_count(), 6, 0, 0, 0);
+
+		auto ibl_pixel_shader_barrier = CD3DX12_RESOURCE_BARRIER::Transition(ibl_cubemap_texture.resource.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+		command_list->ResourceBarrier(1, &ibl_pixel_shader_barrier);
+	}
 
 	HR_CHECK(command_list->Close());
 
 	ID3D12CommandList* p_cmd_list = command_list.Get();
 	command_queue->ExecuteCommandLists(1, &p_cmd_list);
-	wait_gpu_idle(device, command_queue);
+	
+	// wait_gpu_idle(device, command_queue);
 
-	//TODO: Reuse these for convolute
 	spherical_to_cube_scene.release();
 	spherical_to_cube_instance.release();
+	convolute_cube_instance.release();
 
 	GltfAsset gltf_asset;
 	if (!gltf_load_asset("data/meshes/sphere.glb", &gltf_asset))
@@ -747,8 +792,7 @@ int main()
 	//fill texture indices on instance data
 	for (size_t i = 0; i < backbuffer_count; ++i)
 	{
-		mesh_constant_buffers.data(i).texture_index = ibl_diffuse_texture.bindless_index;
-		skybox_constant_buffers.data(i).texture_index = cubemap_texture.bindless_index;
+		mesh_constant_buffers.data(i).texture_index = ibl_equirectangular_texture.bindless_index;
 	}
 
 	XMVECTOR cam_pos	 = XMVectorSet(0.f, -10.f, 30.f, 1.f);
@@ -760,6 +804,8 @@ int main()
 	size_t frames_rendered = 0;
 
 	POINT last_mouse_pos = {};
+
+	bool show_convoluted_cubemap = false;
 	
 	bool should_close = false;
 	bool vsync_enabled = true;
@@ -812,14 +858,11 @@ int main()
 
 			//ImGui Code goes here
 
-			ImGui::ShowDemoWindow();
-
 			ImGui::Text("FPS: %0.f", roundf(ImGui::GetIO().Framerate));
 
 			ImGui::Checkbox("vsync", &vsync_enabled);
 
-			static float DraggableFloat = 0.0f;
-			ImGui::SliderFloat("DraggableFloat", &DraggableFloat, 0.0f, 1.0f);
+			ImGui::Checkbox("show convolution", &show_convoluted_cubemap);
 
 			ImGui::Render();
 
@@ -863,6 +906,8 @@ int main()
 			
 			scene_cbuffer_data.cam_pos = cam_pos;
 			scene_cbuffer_data.cam_dir = cam_forward;
+
+			skybox_constant_buffers.data(frame_resources.frame_index).texture_index = show_convoluted_cubemap ? ibl_cubemap_texture.bindless_index : hdr_cubemap_texture.bindless_index;
 
 			HR_CHECK(command_allocators[frame_resources.frame_index]->Reset());
 
@@ -964,13 +1009,14 @@ int main()
 
 	printf("FPS: %f\n", static_cast<float>(frames_rendered) / accumulated_delta_time);
 
-	
 	{ //Free all memory allocated with D3D12 Memory Allocator
 		bindless_resource_manager.release();
 
-		ibl_diffuse_texture.release();
-		hdr_texture.release();
-		cubemap_texture.release();
+		ibl_equirectangular_texture.release();
+		hdr_equirectangular_texture.release();
+		
+		hdr_cubemap_texture.release();
+		ibl_cubemap_texture.release();
 		
 		for (Mesh& mesh : meshes)
 		{

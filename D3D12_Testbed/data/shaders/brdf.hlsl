@@ -1,5 +1,7 @@
+#ifndef __BRDF_HLSL__
+#define __BRDF_HLSL__
 
-static const float PI = 3.14159265359;
+#include "math.hlsl"
 
 float distribution_ggx(const float n_dot_h, const float roughness)
 {
@@ -94,3 +96,5 @@ float3 brdf_main(const float3 n, const float3 l, const float3 v, const float3 al
     
     return out_color;
 }
+
+#endif //__BRDF_HLSL__
