@@ -5,28 +5,7 @@
 #include "instance.hlsl"
 #include "bindless.hlsl"
 
-//Testing Equirectangular Sampling
-//Texture2D<float4> hdr_texture : register(t0);
-
-SamplerState      hdr_sampler : register(s0);
-
-float2 spherical_uv(float3 v)
-{
-    v = normalize(v);
-    float2 uv = float2(atan2(v.z, v.x), asin(v.y));
-    const float2 inv_atan = float2(0.1591, 0.3183);
-    uv *= inv_atan;
-    uv += 0.5;
-    return uv;
-}
-
-//TODO: replace with cubemap once we've computed it
-float4 sample_environment_map(const float3 v)
-{
-    const float2 uv = spherical_uv(v);
-    const float3 color = Texture2DTable[texture_index].Sample(hdr_sampler, uv).rgb;
-    return float4(color, 1);
-}
+SamplerState ibl_sampler : register(s0);
 
 float4x4 m_translate(const float3 v)
 {
@@ -122,7 +101,7 @@ float4 ps_main(const PsInput input) : SV_TARGET
     }
 
     //Sample environment map
-    const float3 irradiance = sample_environment_map(normal).rgb;
+    const float3 irradiance = TextureCubeTable[texture_index].Sample(ibl_sampler, normal).rgb;
     
     const float3 ks = fresnel_schlick(max(dot(normal, view_dir), 0.0), f0);
     float3 kd = 1.0 - ks;

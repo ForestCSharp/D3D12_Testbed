@@ -536,10 +536,6 @@ int main()
 	HR_CHECK(command_list->Close());
 
 	//Load Environment Map
-	//TODO: remove this once we're sampling ibl_cubemap_texture
-	Texture ibl_equirectangular_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, "data/hdr/Frozen_Waterfall_Env.hdr");
-	ibl_equirectangular_texture.set_name(TEXT("Filtered Env Map (equirectangular)"));
-
 	Texture hdr_equirectangular_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, "data/hdr/Frozen_Waterfall_Ref.hdr");
 	hdr_equirectangular_texture.set_name(TEXT("Env Map (equirectangular)"));
 
@@ -559,7 +555,6 @@ int main()
 	bindless_resource_manager.register_texture(hdr_cubemap_texture);
 	bindless_resource_manager.register_texture(ibl_cubemap_texture);
 
-	bindless_resource_manager.register_texture(ibl_equirectangular_texture);
 	bindless_resource_manager.register_texture(hdr_equirectangular_texture);
 
 	ID3D12DescriptorHeap* bindless_heaps[] = { bindless_resource_manager.bindless_descriptor_heap.Get()};
@@ -698,7 +693,6 @@ int main()
 		const D3D12_RECT scissor_rect = { 0, 0, static_cast<LONG>(ibl_cube_size), static_cast<LONG>(ibl_cube_size) };
 		command_list->RSSetScissorRects(1, &scissor_rect);
 
-		//TODO: This is likely causing too long of a GPU hang, causing us to lose device.
 		command_list->DrawIndexedInstanced(cube.index_count(), 6, 0, 0, 0);
 
 		auto ibl_pixel_shader_barrier = CD3DX12_RESOURCE_BARRIER::Transition(ibl_cubemap_texture.resource.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -792,7 +786,7 @@ int main()
 	//fill texture indices on instance data
 	for (size_t i = 0; i < backbuffer_count; ++i)
 	{
-		mesh_constant_buffers.data(i).texture_index = ibl_equirectangular_texture.bindless_index;
+		mesh_constant_buffers.data(i).texture_index = ibl_cubemap_texture.bindless_index;
 	}
 
 	XMVECTOR cam_pos	 = XMVectorSet(0.f, -10.f, 30.f, 1.f);
@@ -1011,8 +1005,7 @@ int main()
 
 	{ //Free all memory allocated with D3D12 Memory Allocator
 		bindless_resource_manager.release();
-
-		ibl_equirectangular_texture.release();
+		
 		hdr_equirectangular_texture.release();
 		
 		hdr_cubemap_texture.release();
