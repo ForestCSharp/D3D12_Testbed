@@ -1,36 +1,8 @@
-//*********************************************************
-//
-// Copyright (c) Microsoft. All rights reserved.
-// This code is licensed under the MIT License (MIT).
-// THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
-// ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING ANY
-// IMPLIED WARRANTIES OF FITNESS FOR A PARTICULAR
-// PURPOSE, MERCHANTABILITY, OR NON-INFRINGEMENT.
-//
-//*********************************************************
 
-cbuffer SceneConstantBuffer : register(b0)
-{
-    float4x4 view;
-    float4x4 proj;
-    //TODO: vars for PBR
-    float4 cam_pos;
-	float4 cam_dir;
-    uint texture_index;
-};
+#include "scene.hlsl"
+#include "bindless.hlsl"
 
-//TODO: HLSL header file for bindless resources
-#define myTex2DSpace space1
-#define myTexCubeSpace space2
-
-#define BINDLESS_TABLE_SIZE 10000 //TODO Sync up with C++
-
-Texture2D   Texture2DTable[BINDLESS_TABLE_SIZE]   : register(t0, myTex2DSpace);
-TextureCube TextureCubeTable[BINDLESS_TABLE_SIZE] : register(t0, myTexCubeSpace);
-
-//Testing Equirectangular Sampling
-//Texture2D<float4> hdr_texture : register(t0);
-SamplerState      hdr_sampler : register(s0);
+SamplerState hdr_sampler : register(s0);
 
 float2 spherical_uv(float3 v)
 {

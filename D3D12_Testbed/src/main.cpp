@@ -47,6 +47,71 @@ struct SceneConstantBuffer
 	UINT	 texture_index;
 };
 
+struct InstanceConstantBuffer
+{
+	UINT texture_index;
+};
+
+//TODO: Move to helpers file
+//Templated constant buffer
+template <typename T>
+struct TConstantBuffer
+{
+	// T data;
+	ComPtr<ID3D12Resource> resource;
+	D3D12MA::Allocation* allocation;
+	T* data_ptr;
+	
+	explicit TConstantBuffer(D3D12MA::Allocator* gpu_memory_allocator)
+	{
+		D3D12MA::ALLOCATION_DESC alloc_desc = {};
+		alloc_desc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+ 
+		D3D12_RESOURCE_DESC resource_desc = {};
+		resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+		resource_desc.Alignment = 0;
+		resource_desc.Width = (sizeof(T)+ 255) & ~255;
+		resource_desc.Height = 1;
+		resource_desc.DepthOrArraySize = 1;
+		resource_desc.MipLevels = 1;
+		resource_desc.Format = DXGI_FORMAT_UNKNOWN;
+		resource_desc.SampleDesc.Count = 1;
+		resource_desc.SampleDesc.Quality = 0;
+		resource_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+		resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+ 
+		HR_CHECK(gpu_memory_allocator->CreateResource(
+            &alloc_desc,
+            &resource_desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr,
+            &allocation,
+            IID_PPV_ARGS(&resource)
+        ));
+ 
+		HR_CHECK(resource->Map(0, &no_read_range, reinterpret_cast<void**>(&data_ptr)));
+	}
+
+	T& data()
+	{
+		assert(data_ptr != nullptr);
+		return *data_ptr;
+	}
+
+	D3D12_GPU_VIRTUAL_ADDRESS get_gpu_virtual_address() const
+	{
+		return resource->GetGPUVirtualAddress();
+	}
+
+	void release() const
+	{
+		if (allocation)
+		{
+			allocation->Release();
+		}
+	}
+};
+
 struct GpuVertex
 {
 	XMFLOAT3 position;
@@ -367,42 +432,30 @@ int main()
 
 	FrameResources frame_resources(width, height, factory, device, gpu_memory_allocator, command_queue, window);
 
-	// 8. Create our (empty) root signature, which describes resources to be used when running work on the GPU
-	ComPtr<ID3D12RootSignature> root_signature;
-	{
-		std::array<CD3DX12_ROOT_PARAMETER1,2> root_parameters;
-
-		// Constant Buffer View
-		root_parameters[0].InitAsConstantBufferView(0,0,D3D12_ROOT_DESCRIPTOR_FLAG_NONE,D3D12_SHADER_VISIBILITY_ALL);
-
-		CD3DX12_DESCRIPTOR_RANGE1 range{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0 };
-		
-		root_parameters[1].InitAsDescriptorTable(1, &range);
-		
-		std::array<CD3DX12_STATIC_SAMPLER_DESC,1> samplers;
-		samplers[0].Init(0, D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT);
-		
-		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_signature_desc;
-		root_signature_desc.Init_1_1(static_cast<UINT>(root_parameters.size()), root_parameters.data(),
-									 static_cast<UINT>(samplers.size()), samplers.data(),
-									 D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
-		
-		ComPtr<ID3DBlob> signature_blob, error_blob;
-		HR_CHECK(D3D12SerializeVersionedRootSignature(&root_signature_desc, &signature_blob, &error_blob));
-		HR_CHECK(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(&root_signature)));
-	}
-
-	// 9. Compile our vertex and pixel shaders
-	ComPtr<ID3D12PipelineState> pipeline_state = GraphicsPipelineBuilder()
-		.with_root_signature(root_signature)
-		.with_vs(compile_shader(L"data/shaders/pbr.hlsl", "vs_main", "vs_5_1"))
-		.with_ps(compile_shader(L"data/shaders/pbr.hlsl", "ps_main", "ps_5_1"))
-		.with_depth_enabled(true)
-		.with_dsv_format(DXGI_FORMAT_D32_FLOAT)
-		.with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
-		.with_rtv_formats({DXGI_FORMAT_R8G8B8A8_UNORM_SRGB})
-		.with_debug_name(L"pipeline_state")
-		.build(device);
+	// // 8. Create our (empty) root signature, which describes resources to be used when running work on the GPU
+	// ComPtr<ID3D12RootSignature> root_signature;
+	// {
+	// 	std::array<CD3DX12_ROOT_PARAMETER1,2> root_parameters;
+	//
+	// 	// Constant Buffer View
+	// 	root_parameters[0].InitAsConstantBufferView(0,0,D3D12_ROOT_DESCRIPTOR_FLAG_NONE,D3D12_SHADER_VISIBILITY_ALL);
+	//
+	// 	CD3DX12_DESCRIPTOR_RANGE1 range{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0 };
+	// 	
+	// 	root_parameters[1].InitAsDescriptorTable(1, &range);
+	// 	
+	// 	std::array<CD3DX12_STATIC_SAMPLER_DESC,1> samplers;
+	// 	samplers[0].Init(0, D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT);
+	// 	
+	// 	CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_signature_desc;
+	// 	root_signature_desc.Init_1_1(static_cast<UINT>(root_parameters.size()), root_parameters.data(),
+	// 								 static_cast<UINT>(samplers.size()), samplers.data(),
+	// 								 D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+	// 	
+	// 	ComPtr<ID3DBlob> signature_blob, error_blob;
+	// 	HR_CHECK(D3D12SerializeVersionedRootSignature(&root_signature_desc, &signature_blob, &error_blob));
+	// 	HR_CHECK(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(&root_signature)));
+	// }
 
 	//TODO: Helpers for this in BindlessResourceManager
 	ComPtr<ID3D12RootSignature> bindless_root_signature;
@@ -437,13 +490,25 @@ int main()
 
 		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_signature_desc;
 		root_signature_desc.Init_1_1(static_cast<UINT>(root_parameters.size()), root_parameters.data(),
-			static_cast<UINT>(samplers.size()), samplers.data(),
-			D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+            static_cast<UINT>(samplers.size()), samplers.data(),
+            D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
 		ComPtr<ID3DBlob> signature_blob, error_blob;
 		HR_CHECK(D3D12SerializeVersionedRootSignature(&root_signature_desc, &signature_blob, &error_blob));
 		HR_CHECK(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(&bindless_root_signature)));
 	}
+
+	// 9. Compile our vertex and pixel shaders
+	ComPtr<ID3D12PipelineState> pipeline_state = GraphicsPipelineBuilder()
+		.with_root_signature(bindless_root_signature)
+		.with_vs(compile_shader(L"data/shaders/pbr.hlsl", "vs_main", "vs_5_1"))
+		.with_ps(compile_shader(L"data/shaders/pbr.hlsl", "ps_main", "ps_5_1"))
+		.with_depth_enabled(true)
+		.with_dsv_format(DXGI_FORMAT_D32_FLOAT)
+		.with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
+		.with_rtv_formats({DXGI_FORMAT_R8G8B8A8_UNORM_SRGB})
+		.with_debug_name(L"pipeline_state")
+		.build(device);
 
 	ComPtr<ID3D12PipelineState> skybox_pipeline_state = GraphicsPipelineBuilder()
         .with_root_signature(bindless_root_signature)
@@ -481,7 +546,7 @@ int main()
 
 	bindless_resource_manager.register_texture(ibl_diffuse_texture);
 	bindless_resource_manager.register_texture(hdr_texture);
-	//
+
 	// texture_manager.unregister_texture(ibl_diffuse_texture);
 	// texture_manager.unregister_texture(hdr_texture);
 	//
@@ -530,46 +595,16 @@ int main()
 		.with_debug_name(L"spherical_to_cube_pipeline_state")
         .build(device);
 
-	D3D12MA::ALLOCATION_DESC cube_cbuffer_alloc_desc = {};
-	cube_cbuffer_alloc_desc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
- 
-	D3D12_RESOURCE_DESC cube_cbuffer_resource_desc = {};
-	cube_cbuffer_resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-	cube_cbuffer_resource_desc.Alignment = 0;
-	cube_cbuffer_resource_desc.Width = (sizeof(SceneConstantBuffer)+ 255) & ~255;
-	cube_cbuffer_resource_desc.Height = 1;
-	cube_cbuffer_resource_desc.DepthOrArraySize = 1;
-	cube_cbuffer_resource_desc.MipLevels = 1;
-	cube_cbuffer_resource_desc.Format = DXGI_FORMAT_UNKNOWN;
-	cube_cbuffer_resource_desc.SampleDesc.Count = 1;
-	cube_cbuffer_resource_desc.SampleDesc.Quality = 0;
-	cube_cbuffer_resource_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-	cube_cbuffer_resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-	
-	ComPtr<ID3D12Resource> cube_cbuffer;
-	D3D12MA::Allocation* cube_cbuffer_allocation;
-	UINT8* cube_cbuffer_address = nullptr;
- 
-	HR_CHECK(gpu_memory_allocator->CreateResource(
-        &cube_cbuffer_alloc_desc,
-        &cube_cbuffer_resource_desc,
-        D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr,
-        &cube_cbuffer_allocation,
-        IID_PPV_ARGS(&cube_cbuffer)
-    ));
- 
-	HR_CHECK(cube_cbuffer->Map(0, &no_read_range, reinterpret_cast<void**>(&cube_cbuffer_address)));
+	TConstantBuffer<SceneConstantBuffer> spherical_to_cube_constant_buffer(gpu_memory_allocator);
 
 	XMVECTOR cube_cam_pos	  = XMVectorSet(0.f, 0.f, 0.f, 1.f);
 	XMVECTOR cube_cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);
 	XMVECTOR cube_cam_up	  = XMVectorSet(0.f, 1.f, 0.f, 0.f);
 
-	SceneConstantBuffer spherical_to_cube_cbuffer_data;
+	SceneConstantBuffer& spherical_to_cube_cbuffer_data = spherical_to_cube_constant_buffer.data();
 	spherical_to_cube_cbuffer_data.view = XMMatrixLookAtLH(cube_cam_pos, cube_cam_forward, cube_cam_up);
 	spherical_to_cube_cbuffer_data.proj = XMMatrixIdentity();
 	spherical_to_cube_cbuffer_data.texture_index = hdr_texture.bindless_index;
-	memcpy(cube_cbuffer_address, &spherical_to_cube_cbuffer_data, sizeof(spherical_to_cube_cbuffer_data));
 
 	//Reset command list using this frame's command allocator
 	HR_CHECK(command_list->Reset(command_allocators[frame_resources.frame_index].Get(), spherical_to_cube_pipeline_state.Get()));
@@ -585,7 +620,7 @@ int main()
 	command_list->SetDescriptorHeaps(_countof(bindless_heaps), bindless_heaps);
 
 	//Slot 0: constant buffer view
-	command_list->SetGraphicsRootConstantBufferView(0, cube_cbuffer->GetGPUVirtualAddress());
+	command_list->SetGraphicsRootConstantBufferView(0, spherical_to_cube_constant_buffer.get_gpu_virtual_address());
 	//1: bindless texture table
 	command_list->SetGraphicsRootDescriptorTable(1, bindless_resource_manager.get_texture_gpu_handle());
 	//2. bindless cubemap table
@@ -618,7 +653,7 @@ int main()
 	command_queue->ExecuteCommandLists(1, &p_cmd_list);
 	wait_gpu_idle(device, command_queue);
 
-	cube_cbuffer_allocation->Release();
+	spherical_to_cube_constant_buffer.release();
 
 	GltfAsset gltf_asset;
 	if (!gltf_load_asset("data/meshes/sphere.glb", &gltf_asset))
@@ -687,54 +722,17 @@ int main()
 		meshes.emplace_back(Mesh(gpu_memory_allocator, vertices, indices));
 	}
 
-	// Note: using upload heaps to transfer static data like vert buffers is not 
-	// recommended. Every time the GPU needs it, the upload heap will be marshalled 
-	// over. Please read up on Default Heap usage. An upload heap is used here for 
-	// code simplicity and because there are very few verts to actually transfer.
-	
-	D3D12MA::ALLOCATION_DESC alloc_desc = {};
-	alloc_desc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
-
-	// 14. Create Constant Buffer
-	D3D12_RESOURCE_DESC resource_desc = {};
-	resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-	resource_desc.Alignment = 0;
-	resource_desc.Width = (sizeof(SceneConstantBuffer)+ 255) & ~255;
-	resource_desc.Height = 1;
-	resource_desc.DepthOrArraySize = 1;
-	resource_desc.MipLevels = 1;
-	resource_desc.Format = DXGI_FORMAT_UNKNOWN;
-	resource_desc.SampleDesc.Count = 1;
-	resource_desc.SampleDesc.Quality = 0;
-	resource_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-	resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-
-	array<ComPtr<ID3D12Resource>,backbuffer_count> constant_buffers;
-	D3D12MA::Allocation* constant_buffer_allocations[backbuffer_count];
-	UINT8* cbv_gpu_addresses[backbuffer_count];
-
+	std::vector<TConstantBuffer<SceneConstantBuffer>> scene_constant_buffers;
 	for (uint32_t i = 0; i < backbuffer_count; ++i)
 	{
-		ComPtr<ID3D12Resource>& constant_buffer = constant_buffers[i];
-
-		HR_CHECK(gpu_memory_allocator->CreateResource(
-			&alloc_desc,
-			&resource_desc,
-			D3D12_RESOURCE_STATE_GENERIC_READ,
-			nullptr,
-			&constant_buffer_allocations[i],
-			IID_PPV_ARGS(&constant_buffer)
-		));
-
-		// Map and initialize the constant buffer. don't unmap this until the app closes, as it is constantly updated
-		HR_CHECK(constant_buffer->Map(0, &no_read_range, reinterpret_cast<void**>(&cbv_gpu_addresses[i])));
+		scene_constant_buffers.push_back(std::move(TConstantBuffer<SceneConstantBuffer>(gpu_memory_allocator)));
 	}
 
 	XMVECTOR cam_pos	 = XMVectorSet(0.f, -10.f, 30.f, 1.f);
 	XMVECTOR cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);
 	XMVECTOR cam_up		 = XMVectorSet(0.f, 1.f, 0.f, 0.f);
 
-	SceneConstantBuffer scene_cbuffer_data = {};
+	// SceneConstantBuffer scene_cbuffer_data = {};
 
 	clock_t time = clock();
 	double accumulated_delta_time = 0.0f;
@@ -795,6 +793,8 @@ int main()
 
 			ImGui::ShowDemoWindow();
 
+			ImGui::Text("FPS: %0.f", roundf(ImGui::GetIO().Framerate));
+
 			ImGui::Checkbox("vsync", &vsync_enabled);
 
 			static float DraggableFloat = 0.0f;
@@ -831,33 +831,35 @@ int main()
 				}
 			}
 
+			auto& current_scene_cbuffer = scene_constant_buffers[frame_resources.frame_index];
+
 			XMVECTOR target = cam_pos + cam_forward;
-			scene_cbuffer_data.view = XMMatrixLookAtLH(cam_pos, target, cam_up);
+			current_scene_cbuffer.data().view = XMMatrixLookAtLH(cam_pos, target, cam_up);
 
 			float fov_y = 45.0f;// * XM_PI / 180.0f;
 			float aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
-			scene_cbuffer_data.proj = XMMatrixPerspectiveFovLH(fov_y, aspect_ratio, 0.01f, 100000.0f);
+			current_scene_cbuffer.data().proj = XMMatrixPerspectiveFovLH(fov_y, aspect_ratio, 0.01f, 100000.0f);
 			
-			scene_cbuffer_data.cam_pos = cam_pos;
-			scene_cbuffer_data.cam_dir = cam_forward;
-			scene_cbuffer_data.texture_index = cubemap_texture.bindless_index;
-			memcpy(cbv_gpu_addresses[frame_resources.frame_index], &scene_cbuffer_data, sizeof(scene_cbuffer_data));
+			current_scene_cbuffer.data().cam_pos = cam_pos;
+			current_scene_cbuffer.data().cam_dir = cam_forward;
+			current_scene_cbuffer.data().texture_index = cubemap_texture.bindless_index;
+			// memcpy(cbv_gpu_addresses[frame_resources.frame_index], &scene_cbuffer_data, sizeof(scene_cbuffer_data));
 
 			HR_CHECK(command_allocators[frame_resources.frame_index]->Reset());
 
 			HR_CHECK(command_list->Reset(command_allocators[frame_resources.frame_index].Get(), pipeline_state.Get()));
 
 			// Set necessary state.
-			command_list->SetGraphicsRootSignature(root_signature.Get());
+			command_list->SetGraphicsRootSignature(bindless_root_signature.Get());
 
-			//NOTE: Only one heap of a given type can be set at a time
-			ID3D12DescriptorHeap* descriptor_heaps[] = { ibl_diffuse_texture.texture_descriptor_heap_srv.Get() };
-			command_list->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
+			command_list->SetDescriptorHeaps(_countof(bindless_heaps), bindless_heaps);
 
-			//Slot 0: constant buffer view
-			command_list->SetGraphicsRootConstantBufferView(0, constant_buffers[frame_resources.frame_index]->GetGPUVirtualAddress());
-			//Slot 1: hdr texture
-			command_list->SetGraphicsRootDescriptorTable(1, ibl_diffuse_texture.texture_descriptor_heap_srv->GetGPUDescriptorHandleForHeapStart());
+			//0: Cbuffer
+			command_list->SetGraphicsRootConstantBufferView(0, current_scene_cbuffer.get_gpu_virtual_address());
+			//1: bindless texture table
+			command_list->SetGraphicsRootDescriptorTable(1, bindless_resource_manager.get_texture_gpu_handle());
+			//2. bindless cubemap table
+			command_list->SetGraphicsRootDescriptorTable(2, bindless_resource_manager.get_cubemap_gpu_handle());
 
 			D3D12_VIEWPORT viewport = {};
 			viewport.TopLeftX = 0.0f;
@@ -900,16 +902,9 @@ int main()
 			{
 				//Set Pipeline State
 				command_list->SetPipelineState(skybox_pipeline_state.Get());
-				command_list->SetGraphicsRootSignature(bindless_root_signature.Get());
 
-				command_list->SetDescriptorHeaps(_countof(bindless_heaps), bindless_heaps);
-
-				//0: Cbuffer
-				command_list->SetGraphicsRootConstantBufferView(0, constant_buffers[frame_resources.frame_index]->GetGPUVirtualAddress());
-				//1: bindless texture table
-				command_list->SetGraphicsRootDescriptorTable(1, bindless_resource_manager.get_texture_gpu_handle());
-				//2. bindless cubemap table
-				command_list->SetGraphicsRootDescriptorTable(2, bindless_resource_manager.get_cubemap_gpu_handle());
+				// //0: Cbuffer //TODO: Skybox cbuffer (only working currently because our cubemap + env indices are identical
+				// command_list->SetGraphicsRootConstantBufferView(0, constant_buffers[frame_resources.frame_index]->GetGPUVirtualAddress());
 
 				command_list->IASetVertexBuffers(0, 1, &cube.vertex_buffer_view);
 				command_list->IASetIndexBuffer(&cube.index_buffer_view);
@@ -965,7 +960,7 @@ int main()
 
 		for (UINT i = 0; i < backbuffer_count; ++i)
 		{
-			constant_buffer_allocations[i]->Release();
+			scene_constant_buffers[i].release();
 		}
 
 		frame_resources.depth_texture_allocation->Release();

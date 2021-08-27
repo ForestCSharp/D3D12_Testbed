@@ -1,19 +1,11 @@
-#include "brdf_main.hlsli"
+#include "brdf.hlsl"
 
-cbuffer SceneConstantBuffer : register(b0)
-{
-    float4x4 view;
-    float4x4 proj;
-    //TODO: vars for PBR
-    float4 cam_pos;
-	float4 cam_dir;
-    //TODO: light_array
-};
-
-//TODO: InstanceConstantBuffer
+#include "scene.hlsl"
+#include "bindless.hlsl"
 
 //Testing Equirectangular Sampling
-Texture2D<float4> hdr_texture : register(t0);
+//Texture2D<float4> hdr_texture : register(t0);
+
 SamplerState      hdr_sampler : register(s0);
 
 float2 spherical_uv(float3 v)
@@ -30,7 +22,7 @@ float2 spherical_uv(float3 v)
 float4 sample_environment_map(const float3 v)
 {
     const float2 uv = spherical_uv(v);
-    const float3 color = hdr_texture.Sample(hdr_sampler, uv).rgb;
+    const float3 color = Texture2DTable[texture_index].Sample(hdr_sampler, uv).rgb;
     return float4(color, 1);
 }
 
