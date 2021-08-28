@@ -448,7 +448,7 @@ int main()
 		}
 
 		void wait_for_previous_frame(ComPtr<ID3D12CommandQueue> command_queue)
-		{
+		{			
 			const UINT64 current_fence_value = fence_values[frame_index];
 			HR_CHECK(command_queue->Signal(fence.Get(), current_fence_value));
 
@@ -625,7 +625,8 @@ int main()
 	convolute_cube_instance.data().texture_index = hdr_cubemap_texture.bindless_index;
 
 	//Reset command list using this frame's command allocator
-	HR_CHECK(command_list->Reset(command_allocators[backbuffer_count - 1].Get(), spherical_to_cube_pipeline_state.Get()));
+	HR_CHECK(command_allocators[frame_resources.frame_index]->Reset());
+	HR_CHECK(command_list->Reset(command_allocators[frame_resources.frame_index].Get(), spherical_to_cube_pipeline_state.Get()));
 
 	//Begin Equirectangular to Cubemap
 	{
@@ -704,77 +705,87 @@ int main()
 	ID3D12CommandList* p_cmd_list = command_list.Get();
 	command_queue->ExecuteCommandLists(1, &p_cmd_list);
 	
-	// wait_gpu_idle(device, command_queue);
+	wait_gpu_idle(device, command_queue);
 
 	spherical_to_cube_scene.release();
 	spherical_to_cube_instance.release();
 	convolute_cube_instance.release();
 
-	GltfAsset gltf_asset;
-	if (!gltf_load_asset("data/meshes/sphere.glb", &gltf_asset))
-	{
-		printf("FAILED TO LOAD GLTF ASSET\n");
-		exit(1);
-	}
-	assert(gltf_asset.num_meshes > 0);
+	uint32_t model_to_render = 0;
+	const char* model_paths[3] = {"data/meshes/sphere.glb", "data/meshes/Monkey.glb", "data/meshes/LunaMoth.glb"};
 
-	std::vector<Mesh> meshes;
-	GltfMesh* gltf_mesh = &gltf_asset.meshes[0];
-	for (uint32_t prim_idx = 0; prim_idx < gltf_mesh->num_primitives; ++prim_idx)
+	std::vector<std::vector<Mesh>> models;
+
+	for (uint32_t i = 0; i < _countof(model_paths); ++i)
 	{
-		std::vector<GpuVertex> vertices;
-		std::vector<UINT32> indices;
-		
-		GltfPrimitive* primitive = &gltf_mesh->primitives[prim_idx];
-	
-		//Vertices
-		uint8_t* positions_buffer = primitive->positions->buffer_view->buffer->data;
-		positions_buffer += gltf_accessor_get_initial_offset(primitive->positions);
-		uint32_t positions_byte_stride = gltf_accessor_get_stride(primitive->positions);
-	
-		uint8_t* normals_buffer = primitive->normals->buffer_view->buffer->data;
-		normals_buffer += gltf_accessor_get_initial_offset(primitive->normals);
-		uint32_t normals_byte_stride = gltf_accessor_get_stride(primitive->normals);
-	
-		uint8_t* uvs_buffer = primitive->texcoord0->buffer_view->buffer->data;
-		uvs_buffer += gltf_accessor_get_initial_offset(primitive->texcoord0);
-		uint32_t uvs_byte_stride = gltf_accessor_get_stride(primitive->texcoord0);
-	
-		uint32_t vertices_count = primitive->positions->count;
-		vertices.reserve(vertices_count);
-	
-		for (uint32_t vert_idx = 0; vert_idx < vertices_count; ++vert_idx) 
+		GltfAsset gltf_asset;
+		if (!gltf_load_asset(model_paths[i], &gltf_asset))
 		{
-			GpuVertex vertex;
-			memcpy(&vertex.position, positions_buffer, positions_byte_stride);
-			memcpy(&vertex.normal, normals_buffer, normals_byte_stride);
-			vertex.color = XMFLOAT4(0.2f, 0.2f, 0.2f, 1.0f);
-			memcpy(&vertex.uv, uvs_buffer, uvs_byte_stride);
-		
-			positions_buffer += positions_byte_stride;
-			normals_buffer += normals_byte_stride;
-			uvs_buffer += uvs_byte_stride;
-	
-			vertices.push_back(vertex);
+			printf("FAILED TO LOAD GLTF ASSET\n");
+			exit(1);
 		}
-	
-		//Indices
-		uint8_t* indices_buffer = primitive->indices->buffer_view->buffer->data;
-		indices_buffer += gltf_accessor_get_initial_offset(primitive->indices);
-		uint32_t indices_byte_stride = gltf_accessor_get_stride(primitive->indices);
-	
-		uint32_t indices_count = primitive->indices->count;
-		indices.reserve(indices_count);
-	
-		for (uint32_t indices_idx = 0; indices_idx < indices_count; ++indices_idx) 
+		assert(gltf_asset.num_meshes > 0);
+		
+		std::vector<Mesh> meshes;
+		GltfMesh* gltf_mesh = &gltf_asset.meshes[0];
+		for (uint32_t prim_idx = 0; prim_idx < gltf_mesh->num_primitives; ++prim_idx)
 		{
-			UINT32 index = 0; //Need to init for memcpy
-			memcpy(&index, indices_buffer, indices_byte_stride);
-			indices_buffer += indices_byte_stride;
-			indices.push_back(index);
+			std::vector<GpuVertex> vertices;
+			std::vector<UINT32> indices;
+		
+			GltfPrimitive* primitive = &gltf_mesh->primitives[prim_idx];
+	
+			//Vertices
+			uint8_t* positions_buffer = primitive->positions->buffer_view->buffer->data;
+			positions_buffer += gltf_accessor_get_initial_offset(primitive->positions);
+			uint32_t positions_byte_stride = gltf_accessor_get_stride(primitive->positions);
+	
+			uint8_t* normals_buffer = primitive->normals->buffer_view->buffer->data;
+			normals_buffer += gltf_accessor_get_initial_offset(primitive->normals);
+			uint32_t normals_byte_stride = gltf_accessor_get_stride(primitive->normals);
+	
+			uint8_t* uvs_buffer = primitive->texcoord0->buffer_view->buffer->data;
+			uvs_buffer += gltf_accessor_get_initial_offset(primitive->texcoord0);
+			uint32_t uvs_byte_stride = gltf_accessor_get_stride(primitive->texcoord0);
+	
+			uint32_t vertices_count = primitive->positions->count;
+			vertices.reserve(vertices_count);
+	
+			for (uint32_t vert_idx = 0; vert_idx < vertices_count; ++vert_idx) 
+			{
+				GpuVertex vertex;
+				memcpy(&vertex.position, positions_buffer, positions_byte_stride);
+				memcpy(&vertex.normal, normals_buffer, normals_byte_stride);
+				vertex.color = XMFLOAT4(0.2f, 0.2f, 0.2f, 1.0f);
+				memcpy(&vertex.uv, uvs_buffer, uvs_byte_stride);
+		
+				positions_buffer += positions_byte_stride;
+				normals_buffer += normals_byte_stride;
+				uvs_buffer += uvs_byte_stride;
+	
+				vertices.push_back(vertex);
+			}
+	
+			//Indices
+			uint8_t* indices_buffer = primitive->indices->buffer_view->buffer->data;
+			indices_buffer += gltf_accessor_get_initial_offset(primitive->indices);
+			uint32_t indices_byte_stride = gltf_accessor_get_stride(primitive->indices);
+	
+			uint32_t indices_count = primitive->indices->count;
+			indices.reserve(indices_count);
+	
+			for (uint32_t indices_idx = 0; indices_idx < indices_count; ++indices_idx) 
+			{
+				UINT32 index = 0; //Need to init for memcpy
+				memcpy(&index, indices_buffer, indices_byte_stride);
+				indices_buffer += indices_byte_stride;
+				indices.push_back(index);
+			}
+
+			meshes.emplace_back(Mesh(gpu_memory_allocator, vertices, indices));
 		}
 
-		meshes.emplace_back(Mesh(gpu_memory_allocator, vertices, indices));
+		models.push_back(meshes);
 	}
 
 	TPerFrameConstantBuffer<SceneConstantBuffer, backbuffer_count> scene_constant_buffers(gpu_memory_allocator);
@@ -800,6 +811,7 @@ int main()
 	POINT last_mouse_pos = {};
 
 	bool show_convoluted_cubemap = false;
+	int mesh_instance_count = 100;
 	
 	bool should_close = false;
 	bool vsync_enabled = true;
@@ -846,17 +858,41 @@ int main()
 		//Rendering
 		if (width > 0 && height > 0)
 		{
+			//Only wait for the frame resources we need if we know we need to render (aka have a swapchain with valid dimensions)
+			frame_resources.wait_for_previous_frame(command_queue);
+			
 			ImGui_ImplDX12_NewFrame();
 			ImGui_ImplWin32_NewFrame();
 			ImGui::NewFrame();
 
 			//ImGui Code goes here
 
-			ImGui::Text("FPS: %0.f", roundf(ImGui::GetIO().Framerate));
+			ImGui::Text("FPS: %.f", ImGui::GetIO().Framerate);
 
 			ImGui::Checkbox("vsync", &vsync_enabled);
 
-			ImGui::Checkbox("show convolution", &show_convoluted_cubemap);
+			ImGui::Checkbox("Show Convolution", &show_convoluted_cubemap);
+
+			if (ImGui::BeginCombo("Model to Render", model_paths[static_cast<size_t>(model_to_render)]))
+			{
+				for (uint32_t i = 0; i < models.size(); ++i)
+				{
+					const bool is_selected = i == model_to_render;
+					if (ImGui::Selectable(model_paths[i], is_selected))
+					{
+						model_to_render = i;
+					}
+
+					if (is_selected)
+					{
+						ImGui::SetItemDefaultFocus();
+					}
+				}
+
+				ImGui::EndCombo();
+			}
+
+			ImGui::SliderInt("Model Instance Count", &mesh_instance_count, 0, 100);
 
 			ImGui::Render();
 
@@ -951,11 +987,11 @@ int main()
 			command_list->ClearRenderTargetView(rtv_handle, clear_color, 0, nullptr);
 			command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 			
-			for (Mesh& mesh : meshes)
+			for (Mesh& mesh : models[static_cast<size_t>(model_to_render)])
 			{
 				command_list->IASetVertexBuffers(0, 1, &mesh.vertex_buffer_view);
 				command_list->IASetIndexBuffer(&mesh.index_buffer_view);
-				command_list->DrawIndexedInstanced(mesh.index_count(), 100, 0, 0, 0);
+				command_list->DrawIndexedInstanced(mesh.index_count(), mesh_instance_count, 0, 0, 0);
 			}
 
 			//Render Skybox
@@ -989,8 +1025,6 @@ int main()
 			// Present the frame.
 			const UINT sync_interval = vsync_enabled ? 1 : 0;
 			HR_CHECK(frame_resources.swapchain->Present(sync_interval, 0));
-
-			frame_resources.wait_for_previous_frame(command_queue);
 		}
 
 		if (is_key_down(VK_ESCAPE) || !IsWindow(window) )
@@ -1010,10 +1044,13 @@ int main()
 		
 		hdr_cubemap_texture.release();
 		ibl_cubemap_texture.release();
-		
-		for (Mesh& mesh : meshes)
+
+		for (auto& meshes : models)
 		{
-			mesh.release();
+			for (Mesh& mesh : meshes)
+			{
+				mesh.release();
+			}
 		}
 
 		cube.release();
