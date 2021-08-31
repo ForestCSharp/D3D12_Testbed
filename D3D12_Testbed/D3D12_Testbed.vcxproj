@@ -208,7 +208,7 @@
     <ClInclude Include="src\d3d12_texture.h" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="data\shaders\brdf_main.hlsli" />
+    <Folder Include="data\shaders" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -2,10 +2,18 @@
 #include "brdf.hlsl"
 
 #include "scene.hlsl"
-#include "instance.hlsl"
+
+cbuffer InstanceConstantBuffer : register(b1)
+{
+    uint diffuse_ibl_texture_index;
+    uint specular_ibl_texture_index;
+    uint specular_ibl_mip_count;
+    uint specular_lut_texture_index;
+};
+
 #include "bindless.hlsl"
 
-SamplerState ibl_sampler : register(s0);
+SamplerState texture_sampler : register(s0);
 
 float4x4 m_translate(const float3 v)
 {
@@ -89,7 +97,7 @@ float4 ps_main(const PsInput input) : SV_TARGET
     for (int i = 0; i < NUM_LIGHTS; ++i)
     {
         lights[i].color = float3(1,1,1);
-        lights[i].intensity = 5.0f;
+        lights[i].intensity = 50.0f;
         
         const float3 to_light = lights[i].pos - input.world_pos;
         const float distance_to_light_squared = pow(length(to_light),2);
@@ -100,14 +108,25 @@ float4 ps_main(const PsInput input) : SV_TARGET
         brdf_lighting += brdf_main(normal, light_dir, view_dir, albedo, f0, roughness, metallic, radiance);
     }
 
-    //Sample environment map
-    const float3 irradiance = TextureCubeTable[texture_index].Sample(ibl_sampler, normal).rgb;
-    
-    const float3 ks = fresnel_schlick(max(dot(normal, view_dir), 0.0), f0);
+    float n_dot_v = saturate(dot(normal, view_dir));
+
+    //Diffuse IBL
+    const float3 irradiance = TextureCubeTable[diffuse_ibl_texture_index].Sample(texture_sampler, normal).rgb;
+
+    float3 F = fresnel_schlick_roughness(n_dot_v, f0, roughness);
+    const float3 ks = F;
     float3 kd = 1.0 - ks;
     kd *= 1.0 - metallic;
     const float3 diffuse = irradiance * albedo;
-    const float3 ambient = (kd * diffuse) * 0.75f;
+
+    //Specular IBL
+    const float3 r = reflect(-view_dir, normal);
+    const float max_lod = specular_ibl_mip_count - 1.0;
+    float3 prefiltered_color = TextureCubeTable[specular_ibl_texture_index].SampleLevel(texture_sampler, r, roughness * max_lod).rgb;
+    float2 env_brdf = Texture2DTable[specular_lut_texture_index].Sample(texture_sampler, float2(n_dot_v, roughness)).rg;
+    float3 specular = prefiltered_color * (F * env_brdf.x + env_brdf.y);
+
+    const float3 ambient = (kd * diffuse + specular) * 0.75f;
     
     float3 out_color = brdf_lighting + ambient;
 
@@ -115,7 +134,8 @@ float4 ps_main(const PsInput input) : SV_TARGET
     out_color = out_color / (out_color + float3(1,1,1));
     
     // gamma correct
-    float gamma_factor = 1.0/2.2;
+    float gamma = 2.2;
+    float gamma_factor = 1.0/gamma;
     out_color = pow(out_color, float3(gamma_factor, gamma_factor, gamma_factor));
 
     return float4(out_color,1);

@@ -36,12 +36,12 @@ PsInput vs_main(const float3 position : POSITION, const float3 normal : NORMAL, 
 struct PsOutput
 {
 	//TODO: FIX Names
-    float4 front: SV_Target0;
-    float4 back: SV_Target1;
-    float4 top: SV_Target2;
-    float4 bottom: SV_Target3;
-    float4 left: SV_Target4;
-    float4 right: SV_Target5;
+    float4 rt_0: SV_Target0;
+    float4 rt_1: SV_Target1;
+    float4 rt_2: SV_Target2;
+    float4 rt_3: SV_Target3;
+    float4 rt_4: SV_Target4;
+    float4 rt_5: SV_Target5;
 };
 
 float4 convolute(const float3 in_dir)
@@ -69,7 +69,7 @@ float4 convolute(const float3 in_dir)
         }
     }
 
-    irradiance = PI * irradiance * (1.0 / float(nr_samples));
+    irradiance = PI * irradiance * (1.0 / nr_samples);
 
 	return float4(irradiance,1);
 }
@@ -80,19 +80,19 @@ PsOutput ps_main(const PsInput input) : SV_TARGET
 
     float3 sample_dir = normalize(input.world_pos);
 
-    output.front   	  = convolute(sample_dir);
-    output.back       = convolute(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 180));
+    output.rt_0     = convolute(float3_rotate_angle_axis(sample_dir, float3(0,1,0), -90));
+    output.rt_1     = convolute(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 90));
 
-	float3 top_dir 	  = float3_rotate_angle_axis(sample_dir, float3(0,0,1), 90);
-	top_dir 	   	  = float3_rotate_angle_axis(top_dir, float3(1,0,0), 90);
-    output.top     	  = convolute(top_dir);
+	float3 rt_2_dir = float3_rotate_angle_axis(sample_dir, float3(0,0,1), 180);
+	rt_2_dir        = float3_rotate_angle_axis(rt_2_dir, float3(1,0,0), 90);
+    output.rt_2     = convolute(rt_2_dir);
 
-	float3 bot_dir 	  = float3_rotate_angle_axis(sample_dir, float3(0,0,1), -90);
-	bot_dir 	   	  = float3_rotate_angle_axis(bot_dir, float3(1,0,0), -90);
-    output.bottom  	  = convolute(bot_dir);
+	float3 rt_3_dir = float3_rotate_angle_axis(sample_dir, float3(0,0,1), -180);
+	rt_3_dir        = float3_rotate_angle_axis(rt_3_dir, float3(1,0,0), -90);
+    output.rt_3     = convolute(rt_3_dir);
 
-    output.left    	  = convolute(float3_rotate_angle_axis(sample_dir, float3(0,1,0), -90));
-    output.right   	  = convolute(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 90));
+    output.rt_4     = convolute(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 180));
+    output.rt_5     = convolute(sample_dir);
 
     return output;
 }

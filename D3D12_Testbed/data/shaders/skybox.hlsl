@@ -1,7 +1,7 @@
 #include "math.hlsl"
 
 #include "scene.hlsl"
-#include "instance.hlsl"
+#include "instance.hlsl" //TODO: Remove
 #include "bindless.hlsl"
 
 
@@ -36,7 +36,7 @@ PsInput vs_main(const float3 position : POSITION, const float3 normal : NORMAL, 
 float4 ps_main(const PsInput input) : SV_TARGET
 {
     const float3 dir = normalize(input.world_pos);    
-    float4 out_color = TextureCubeTable[texture_index].Sample(cubemap_sampler, dir);
+    float4 out_color = TextureCubeTable[texture_index].SampleLevel(cubemap_sampler, dir, texture_lod);
 
     return out_color;
 }

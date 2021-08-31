@@ -35,26 +35,26 @@ struct Texture
 	D3D12MA::Allocation* allocation = nullptr;
 
 	int bindless_index = INVALID_INDEX;
-
-	//TODO: Won't need these heaps when we go bindless
-	ComPtr<ID3D12DescriptorHeap> texture_descriptor_heap_srv;
-	D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc;
-
-	ComPtr<ID3D12DescriptorHeap> cubemap_descriptor_heap_srv;
 	bool is_cubemap = false;
 
 	//TODO: this likely shouldn't be managed by the texture resource
 	ComPtr<ID3D12DescriptorHeap> texture_descriptor_heap_rtv;
 	std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> rtv_handles;
 
-	Texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format, const D3D12_RESOURCE_FLAGS flags, const UINT image_width, const UINT image_height, const UINT image_count)
+	//TODO: Temp
+	ComPtr<ID3D12DescriptorHeap> per_mip_texture_descriptor_heap_rtv;
+	std::vector<std::vector<D3D12_CPU_DESCRIPTOR_HANDLE>> per_mip_rtv_handles;
+
+	std::string debug_name;
+
+	Texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format, const UINT mip_levels, const D3D12_RESOURCE_FLAGS flags, const UINT image_width, const UINT image_height, const UINT image_count)
 	{
-		create_texture(device, gpu_memory_allocator, format, flags, image_width, image_height, image_count);
-		set_name(TEXT("DefaultTexture"));
+		create_texture(device, gpu_memory_allocator, format, mip_levels, flags, image_width, image_height, image_count);
+		set_name("DefaultTexture");
 	}
 
 	//Loads a single texture from file
-	Texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue, const DXGI_FORMAT format, const char* file)
+	Texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue, const DXGI_FORMAT format, const UINT mip_levels, const char* file)
 	{
 		int image_width, image_height;
 		const int desired_channels = 4; //We want an alpha channel
@@ -62,7 +62,7 @@ struct Texture
 		stbi_set_flip_vertically_on_load(true);
 		if (float* image_data = stbi_loadf(file, &image_width, &image_height, nullptr, desired_channels))
 		{
-			create_texture(device, gpu_memory_allocator, format, D3D12_RESOURCE_FLAG_NONE, image_width, image_height, 1);
+			create_texture(device, gpu_memory_allocator, format, mip_levels, D3D12_RESOURCE_FLAG_NONE, image_width, image_height, 1);
 
 			const size_t image_pixel_size = desired_channels * sizeof(float);
 
@@ -123,7 +123,7 @@ struct Texture
 			staging_buffer_allocation->Release();
 
 			stbi_image_free(image_data);
-			set_name(TEXT("FileTexture"));
+			set_name("FileTexture");
 		}
 		else
 		{
@@ -131,7 +131,7 @@ struct Texture
 		}
 	}
 
-	void create_texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags, const UINT image_width, const UINT image_height, const UINT image_count)
+	void create_texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format,  const UINT mip_levels, D3D12_RESOURCE_FLAGS flags, const UINT image_width, const UINT image_height, const UINT image_count)
 	{
 		assert(gpu_memory_allocator);
 		assert(image_count > 0);
@@ -145,7 +145,7 @@ struct Texture
 		texture_desc.Width = image_width;
 		texture_desc.Height = image_height;
 		texture_desc.DepthOrArraySize = image_count;
-		texture_desc.MipLevels = 1;
+		texture_desc.MipLevels = mip_levels;
 		texture_desc.Format = format;
 		texture_desc.SampleDesc.Count = 1;
 		texture_desc.SampleDesc.Quality = 0;
@@ -166,9 +166,7 @@ struct Texture
 			&allocation,
 			IID_PPV_ARGS(&resource)
 		));
-
-		create_basic_srv(device);
-
+		
 		//Create rtv if we can be a render target
 		if (flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
 		{
@@ -176,83 +174,22 @@ struct Texture
 		}
 	}
 
-	//TODO: Should likely be separated from Texture struct
-	//Creates a basic SRV for this texture resource
-	//TODO: RTV
-	void create_basic_srv(const ComPtr<ID3D12Device> device)
+	//FCS TODO: Remove this, add "register cubemap texture" to bindless_resource_manager
+	void set_is_cubemap(const bool new_is_cubemap)
 	{
-		//create texture descriptor heap
-		D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc = {};
-		descriptor_heap_desc.NumDescriptors = 1;
-		// This heap contains SRV, UAV or CBVs -- in our case one SRV
-		descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-		descriptor_heap_desc.NodeMask = 0;
-		descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-
-		HR_CHECK(device->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&texture_descriptor_heap_srv)));
-		texture_descriptor_heap_srv->SetName(TEXT("texture_descriptor_heap_srv"));
-
-		const UINT16 texture_array_size = resource->GetDesc().DepthOrArraySize;
-		const bool is_texture_array = texture_array_size > 1;
-
-		srv_desc = {};
-
-		//Shared State
-		srv_desc.Format = resource->GetDesc().Format;
-		srv_desc.ViewDimension = is_texture_array ? D3D12_SRV_DIMENSION_TEXTURE2DARRAY : D3D12_SRV_DIMENSION_TEXTURE2D;
-		srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-
-		if (is_texture_array)
+		is_cubemap = new_is_cubemap;
+		if (is_cubemap)
 		{
-			srv_desc.Texture2DArray.MostDetailedMip = 0;
-			srv_desc.Texture2DArray.MipLevels = 1;
-			srv_desc.Texture2DArray.FirstArraySlice = 0;
-			srv_desc.Texture2DArray.ArraySize = texture_array_size;
-			srv_desc.Texture2DArray.PlaneSlice = 0;
-			srv_desc.Texture2DArray.ResourceMinLODClamp = 0.0f;
+			const UINT16 texture_array_size = resource->GetDesc().DepthOrArraySize;
+			assert(texture_array_size >= 6);
 		}
-		else
-		{
-			srv_desc.Texture2D.MostDetailedMip = 0;
-			srv_desc.Texture2D.MipLevels = 1;
-			srv_desc.Texture2D.PlaneSlice = 0;
-			srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
-		}
-
-		device->CreateShaderResourceView(resource.Get(), &srv_desc, texture_descriptor_heap_srv->GetCPUDescriptorHandleForHeapStart());
 	}
 
-	void create_cubemap_srv(const ComPtr<ID3D12Device> device)
-	{
-		//create texture descriptor heap
-		D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc = {};
-		descriptor_heap_desc.NumDescriptors = 1;
-		// This heap contains SRV, UAV or CBVs -- in our case one SRV
-		descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-		descriptor_heap_desc.NodeMask = 0;
-		descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-
-		HR_CHECK(device->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&cubemap_descriptor_heap_srv)));
-		cubemap_descriptor_heap_srv->SetName(TEXT("cubemap_descriptor_heap_srv"));
-
-		const UINT16 texture_array_size = resource->GetDesc().DepthOrArraySize;
-		assert(texture_array_size >= 6);
-
-		D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-
-		srv_desc.Format = resource->GetDesc().Format;
-		srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
-		srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-		srv_desc.TextureCube.MostDetailedMip = 0;
-		srv_desc.TextureCube.MipLevels = 1;
-		srv_desc.TextureCube.ResourceMinLODClamp = 0.f;
-
-		device->CreateShaderResourceView(resource.Get(), &srv_desc, cubemap_descriptor_heap_srv->GetCPUDescriptorHandleForHeapStart());
-		is_cubemap = true;
-	}
-
+	//TODO: Handle this outside of texture struct
 	void create_rtv(const ComPtr<ID3D12Device> device)
 	{
+		const UINT rtv_heap_offset = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+		
 		D3D12_RESOURCE_DESC resource_desc = resource->GetDesc();
 		assert(resource_desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
 
@@ -263,47 +200,99 @@ struct Texture
 		descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
 		descriptor_heap_desc.NodeMask = 0;
 		descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-
-		HR_CHECK(device->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&texture_descriptor_heap_rtv)));
-		texture_descriptor_heap_rtv->SetName(TEXT("texture_descriptor_heap_rtv"));
-
-		D3D12_CPU_DESCRIPTOR_HANDLE rtv_descriptor_handle = texture_descriptor_heap_rtv->GetCPUDescriptorHandleForHeapStart();
-		UINT rtv_heap_offset = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-
-		const UINT16 texture_array_size = resource_desc.DepthOrArraySize;
-		const bool is_texture_array = texture_array_size > 1;
-
-		D3D12_RENDER_TARGET_VIEW_DESC rtv_desc = {};
-
-		//Shared State
-		rtv_desc.Format = resource_desc.Format;
-		rtv_desc.ViewDimension = is_texture_array ? D3D12_RTV_DIMENSION_TEXTURE2DARRAY : D3D12_RTV_DIMENSION_TEXTURE2D;
-
-		for (UINT i = 0; i < resource_desc.DepthOrArraySize; ++i)
+		
 		{
-			if (is_texture_array)
+			HR_CHECK(device->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&texture_descriptor_heap_rtv)));
+			texture_descriptor_heap_rtv->SetName(TEXT("texture_descriptor_heap_rtv"));
+			
+			D3D12_CPU_DESCRIPTOR_HANDLE rtv_descriptor_handle = texture_descriptor_heap_rtv->GetCPUDescriptorHandleForHeapStart();
+
+			const UINT16 texture_array_size = resource_desc.DepthOrArraySize;
+			const bool is_texture_array = texture_array_size > 1;
+
+			D3D12_RENDER_TARGET_VIEW_DESC rtv_desc = {};
+
+			//Shared State
+			rtv_desc.Format = resource_desc.Format;
+			rtv_desc.ViewDimension = is_texture_array ? D3D12_RTV_DIMENSION_TEXTURE2DARRAY : D3D12_RTV_DIMENSION_TEXTURE2D;
+
+			for (UINT i = 0; i < resource_desc.DepthOrArraySize; ++i)
 			{
-				//Treating texture array RTVs as individual 'views' into each slice
-				rtv_desc.Texture2DArray.MipSlice = 0;
-				rtv_desc.Texture2DArray.FirstArraySlice = i;
-				rtv_desc.Texture2DArray.ArraySize = 1;
-				rtv_desc.Texture2DArray.PlaneSlice = 0;
+				if (is_texture_array)
+				{
+					//Treating texture array RTVs as individual 'views' into each slice
+					rtv_desc.Texture2DArray.MipSlice = 0;
+					rtv_desc.Texture2DArray.FirstArraySlice = i;
+					rtv_desc.Texture2DArray.ArraySize = 1;
+					rtv_desc.Texture2DArray.PlaneSlice = 0;
+				}
+				else
+				{
+					rtv_desc.Texture2D.MipSlice = 0;
+					rtv_desc.Texture2D.PlaneSlice = 0;
+				}
+				device->CreateRenderTargetView(resource.Get(), &rtv_desc, rtv_descriptor_handle);
+				rtv_handles.push_back(rtv_descriptor_handle);
+				rtv_descriptor_handle.ptr += rtv_heap_offset;
 			}
-			else
+		}
+
+		//TODO: Testing per mip rtv views
+		{
+			descriptor_heap_desc.NumDescriptors = resource_desc.DepthOrArraySize * resource_desc.MipLevels;
+			HR_CHECK(device->CreateDescriptorHeap(&descriptor_heap_desc, IID_PPV_ARGS(&per_mip_texture_descriptor_heap_rtv)));
+			per_mip_texture_descriptor_heap_rtv->SetName(TEXT("per_mip_texture_descriptor_heap_rtv"));
+			
+			D3D12_CPU_DESCRIPTOR_HANDLE per_mip_rtv_descriptor_handle = per_mip_texture_descriptor_heap_rtv->GetCPUDescriptorHandleForHeapStart();
+
+			const UINT16 texture_array_size = resource_desc.DepthOrArraySize;
+			const bool is_texture_array = texture_array_size > 1;
+
+			D3D12_RENDER_TARGET_VIEW_DESC rtv_desc = {};
+
+			//Shared State
+			rtv_desc.Format = resource_desc.Format;
+			rtv_desc.ViewDimension = is_texture_array ? D3D12_RTV_DIMENSION_TEXTURE2DARRAY : D3D12_RTV_DIMENSION_TEXTURE2D;
+
+			for (UINT mip_level = 0; mip_level < resource_desc.MipLevels; ++mip_level)
 			{
-				rtv_desc.Texture2D.MipSlice = 0;
-				rtv_desc.Texture2D.PlaneSlice = 0;
+				per_mip_rtv_handles.push_back({});
+				
+				for (UINT i = 0; i < resource_desc.DepthOrArraySize; ++i)
+				{
+					if (is_texture_array)
+					{
+						//Treating texture array RTVs as individual 'views' into each slice
+						rtv_desc.Texture2DArray.MipSlice = mip_level;
+						rtv_desc.Texture2DArray.FirstArraySlice = i;
+						rtv_desc.Texture2DArray.ArraySize = 1;
+						rtv_desc.Texture2DArray.PlaneSlice = 0;
+					}
+					else
+					{
+						rtv_desc.Texture2D.MipSlice = mip_level;
+						rtv_desc.Texture2D.PlaneSlice = 0;
+					}
+					device->CreateRenderTargetView(resource.Get(), &rtv_desc, per_mip_rtv_descriptor_handle);
+					per_mip_rtv_handles[mip_level].push_back(per_mip_rtv_descriptor_handle);
+					per_mip_rtv_descriptor_handle.ptr += rtv_heap_offset;
+				}
 			}
-			device->CreateRenderTargetView(resource.Get(), &rtv_desc, rtv_descriptor_handle);
-			rtv_handles.push_back(rtv_descriptor_handle);
-			rtv_descriptor_handle.ptr += rtv_heap_offset;
 		}
 	}
 
-	void set_name(const LPCWSTR in_name) const
+	void set_name(const char* in_name)
 	{
 		assert(resource);
-		resource->SetName(in_name);
+		debug_name = in_name;
+		
+		const std::wstring wide_str = std::wstring(debug_name.begin(), debug_name.end());
+		resource->SetName(wide_str.c_str());
+	}
+
+	const char* get_name() const
+	{
+		return debug_name.c_str();
 	}
 
 	void release()
@@ -340,16 +329,16 @@ struct BindlessResourceManager
 
 	UINT cbv_srv_uav_heap_offset;
 
-	BindlessResourceManager(ComPtr<ID3D12Device> in_device, D3D12MA::Allocator* gpu_memory_allocator)
+	BindlessResourceManager(const ComPtr<ID3D12Device> in_device, D3D12MA::Allocator* gpu_memory_allocator)
 		: device(in_device)
-		, invalid_texture(device, gpu_memory_allocator, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_RESOURCE_FLAG_NONE, 4, 4, 1) //TODO: Load some meaningful image to denote indexing errors
-		, invalid_cubemap(device, gpu_memory_allocator, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_RESOURCE_FLAG_NONE, 4, 4, 6) //TODO: Load some meaningful image to denote indexing errors
+		, invalid_texture(device, gpu_memory_allocator, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, D3D12_RESOURCE_FLAG_NONE, 4, 4, 1) //TODO: Load some meaningful image to denote indexing errors
+		, invalid_cubemap(device, gpu_memory_allocator, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, D3D12_RESOURCE_FLAG_NONE, 4, 4, 6) //TODO: Load some meaningful image to denote indexing errors
 		, cbv_srv_uav_heap_offset(device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV))
 	{
 		//FCS TODO: Eventually this could hold other data as well (CBVs, for example)
-		invalid_cubemap.create_cubemap_srv(device);
+		invalid_cubemap.set_is_cubemap(true);
 
-		invalid_texture.set_name(TEXT("Invalid Texture"));
+		invalid_texture.set_name("Invalid Texture");
 
 		D3D12_DESCRIPTOR_HEAP_DESC bindless_heap_desc = {};
 		bindless_heap_desc.NumDescriptors = BINDLESS_TABLE_SIZE * BINDLESS_DESC_TYPES;
@@ -374,39 +363,40 @@ struct BindlessResourceManager
 		//TODO: Need to unset all textures bindless indices
 	}
 
-	void create_srv_at_index(Texture& in_texture_resource, const size_t index) const
+	void create_srv_at_index(Texture& in_texture, const size_t index) const
 	{
-		const bool is_cubemap = in_texture_resource.is_cubemap;
+		const bool is_cubemap = in_texture.is_cubemap;
+		const D3D12_RESOURCE_DESC resource_desc = in_texture.resource->GetDesc();
 
 		D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
 
 		//Shared State
-		srv_desc.Format = in_texture_resource.resource->GetDesc().Format;
+		srv_desc.Format = in_texture.resource->GetDesc().Format;
 		srv_desc.ViewDimension = is_cubemap ? D3D12_SRV_DIMENSION_TEXTURECUBE : D3D12_SRV_DIMENSION_TEXTURE2D;
 		srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
 		if (is_cubemap)
 		{
 			srv_desc.TextureCube.MostDetailedMip = 0;
-			srv_desc.TextureCube.MipLevels = 1;
+			srv_desc.TextureCube.MipLevels = resource_desc.MipLevels;
 			srv_desc.TextureCube.ResourceMinLODClamp = 0.f;
 		}
 		else
 		{
 			srv_desc.Texture2D.MostDetailedMip = 0;
-			srv_desc.Texture2D.MipLevels = 1;
+			srv_desc.Texture2D.MipLevels = resource_desc.MipLevels;
 			srv_desc.Texture2D.PlaneSlice = 0;
 			srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
 		}
 
 		const size_t heap_index = is_cubemap ? index + BINDLESS_TABLE_SIZE : index;
-		UINT heap_offset = heap_index * cbv_srv_uav_heap_offset;
+		UINT heap_offset = static_cast<UINT>(heap_index * cbv_srv_uav_heap_offset);
 
 		D3D12_CPU_DESCRIPTOR_HANDLE descriptor_handle = bindless_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
 		descriptor_handle.ptr += heap_offset;
-		device->CreateShaderResourceView(in_texture_resource.resource.Get(), &srv_desc, descriptor_handle);
+		device->CreateShaderResourceView(in_texture.resource.Get(), &srv_desc, descriptor_handle);
 
-		in_texture_resource.bindless_index = index;
+		in_texture.bindless_index = static_cast<int>(index);
 	}
 
 	void register_texture(Texture& in_texture_resource)

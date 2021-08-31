@@ -20,6 +20,7 @@ using std::array;
 
 //C
 #include "time.h"
+#include "math.h"
 
 //GLB Loader
 #include "gltf.h"
@@ -48,7 +49,22 @@ struct SceneConstantBuffer
 
 struct InstanceConstantBuffer
 {
+	UINT texture_index = 0;
+	UINT texture_lod = 0;
+};
+
+struct SpecularPrefilterConstantBuffer
+{
 	UINT texture_index;
+	float roughness;
+};
+
+struct MeshRenderConstantBuffer
+{
+	UINT diffuse_ibl_texture_index;
+	UINT specular_ibl_texture_index;
+	UINT specular_ibl_mip_count;
+	UINT specular_lut_texture_index;
 };
 
 //TODO: Move to helpers file
@@ -60,7 +76,7 @@ struct TConstantBuffer
 	D3D12MA::Allocation* allocation = nullptr;
 	T* data_ptr = nullptr;
 
-	TConstantBuffer() = default; //TODO: for std::array in TPerFrameConstantBuffer
+	TConstantBuffer() = default; //TODO: for std::array in TConstantBufferArray
 	
 	explicit TConstantBuffer(D3D12MA::Allocator* gpu_memory_allocator)
 	{
@@ -113,11 +129,11 @@ struct TConstantBuffer
 };
 
 template <typename T, size_t Count>
-struct TPerFrameConstantBuffer
+struct TConstantBufferArray
 {
 	array<TConstantBuffer<T>, Count> constant_buffers;
 	
-	explicit TPerFrameConstantBuffer(D3D12MA::Allocator* gpu_memory_allocator)
+	explicit TConstantBufferArray(D3D12MA::Allocator* gpu_memory_allocator)
 	{
 		for (size_t i = 0; i < Count; ++i)
 		{
@@ -129,6 +145,11 @@ struct TPerFrameConstantBuffer
 	{
 		assert(index < constant_buffers.size());
 		return constant_buffers[index].data();
+	}
+
+	size_t count() const
+	{
+		return constant_buffers.size();
 	}
 
 	D3D12_GPU_VIRTUAL_ADDRESS get_gpu_virtual_address(size_t index) const
@@ -308,7 +329,7 @@ int main()
 		HANDLE fence_event = INVALID_HANDLE_VALUE;
 
 		//TODO: Need a struct to hold device, command_queue, factory, etc.
-		FrameResources(const LONG in_width, const LONG in_height, ComPtr<IDXGIFactory4> factory, ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const ComPtr<ID3D12CommandQueue> command_queue, const HWND window)
+		FrameResources(const UINT in_width, const UINT in_height, ComPtr<IDXGIFactory4> factory, ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const ComPtr<ID3D12CommandQueue> command_queue, const HWND window)
 		{
 			DXGI_SWAP_CHAIN_DESC1 swap_chain_desc = {};
 			swap_chain_desc.BufferCount = backbuffer_count;
@@ -345,7 +366,7 @@ int main()
 			resize(in_width, in_height, device, command_queue, gpu_memory_allocator);
 		}
 
-		void resize(const size_t in_width, const size_t in_height, ComPtr<ID3D12Device> device, ComPtr<ID3D12CommandQueue> command_queue, D3D12MA::Allocator* gpu_memory_allocator)
+		void resize(const UINT in_width, const UINT in_height, ComPtr<ID3D12Device> device, ComPtr<ID3D12CommandQueue> command_queue, D3D12MA::Allocator* gpu_memory_allocator)
 		{
 			wait_gpu_idle(device, command_queue);
 
@@ -495,7 +516,7 @@ int main()
 		root_parameters[3].InitAsDescriptorTable(1, &cube_range);
 
 		std::array<CD3DX12_STATIC_SAMPLER_DESC, 1> samplers;
-		samplers[0].Init(0, D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT);
+		samplers[0].Init(0, D3D12_FILTER_MIN_MAG_MIP_LINEAR);
 
 		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_signature_desc;
 		root_signature_desc.Init_1_0(static_cast<UINT>(root_parameters.size()), root_parameters.data(),
@@ -507,7 +528,7 @@ int main()
 		HR_CHECK(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(&bindless_root_signature)));
 	}
 
-	ComPtr<ID3D12PipelineState> pipeline_state = GraphicsPipelineBuilder()
+	ComPtr<ID3D12PipelineState> pbr_pipeline_state = GraphicsPipelineBuilder()
 		.with_root_signature(bindless_root_signature)
 		.with_vs(compile_shader(L"data/shaders/pbr.hlsl", "vs_main", "vs_5_1"))
 		.with_ps(compile_shader(L"data/shaders/pbr.hlsl", "ps_main", "ps_5_1"))
@@ -532,30 +553,43 @@ int main()
 
 	// 12. Create Command list using command allocator and pipeline state, and close it (we'll record it later)
 	ComPtr<ID3D12GraphicsCommandList> command_list;
-	HR_CHECK(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocators[frame_resources.frame_index].Get(), pipeline_state.Get(), IID_PPV_ARGS(&command_list)));
+	HR_CHECK(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocators[frame_resources.frame_index].Get(), pbr_pipeline_state.Get(), IID_PPV_ARGS(&command_list)));
 	HR_CHECK(command_list->Close());
 
 	//Load Environment Map
-	Texture hdr_equirectangular_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, "data/hdr/Frozen_Waterfall_Ref.hdr");
-	hdr_equirectangular_texture.set_name(TEXT("Env Map (equirectangular)"));
+	Texture hdr_equirectangular_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, "data/hdr/Newport_Loft.hdr");
+	hdr_equirectangular_texture.set_name("Env Map (equirectangular)");
 
 	const UINT hdr_cube_size = 1024;
 	DXGI_FORMAT cubemap_format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-	Texture hdr_cubemap_texture(device, gpu_memory_allocator, cubemap_format, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, hdr_cube_size, hdr_cube_size, 6);
-	hdr_cubemap_texture.set_name(TEXT("HDR Cubemap Texture"));
-	hdr_cubemap_texture.create_cubemap_srv(device);
+	Texture hdr_cubemap_texture(device, gpu_memory_allocator, cubemap_format, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, hdr_cube_size, hdr_cube_size, 6);
+	hdr_cubemap_texture.set_name("HDR Cubemap Texture");
+	hdr_cubemap_texture.set_is_cubemap(true);
 
 	const UINT ibl_cube_size = 16;
-	Texture ibl_cubemap_texture(device, gpu_memory_allocator, cubemap_format, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, ibl_cube_size, ibl_cube_size, 6);
-	ibl_cubemap_texture.set_name(TEXT("IBL Cubemap Texture"));
-	ibl_cubemap_texture.create_cubemap_srv(device);
+	Texture ibl_cubemap_texture(device, gpu_memory_allocator, cubemap_format, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, ibl_cube_size, ibl_cube_size, 6);
+	ibl_cubemap_texture.set_name("IBL Cubemap Texture");
+	ibl_cubemap_texture.set_is_cubemap(true);
+
+	const UINT specular_cube_size = 128;
+	const UINT prefilter_mip_levels = 6;
+	Texture specular_cubemap_texture(device, gpu_memory_allocator, cubemap_format, prefilter_mip_levels, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, specular_cube_size, specular_cube_size, 6);
+	specular_cubemap_texture.set_name("Specular Cubemap Texture");
+	specular_cubemap_texture.set_is_cubemap(true);
+
+	const UINT specular_lut_size = 512;
+	Texture specular_lut_texture(device, gpu_memory_allocator, DXGI_FORMAT_R16G16_FLOAT, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, specular_lut_size, specular_lut_size, 1);
+	specular_lut_texture.set_name("Specular LUT Texture");
 
 	BindlessResourceManager bindless_resource_manager(device, gpu_memory_allocator);
 
+	//TODO: cubemap specific register function (checks that texture has 6 array elements), remove set_is_cubemap function from "Texture"
 	bindless_resource_manager.register_texture(hdr_cubemap_texture);
 	bindless_resource_manager.register_texture(ibl_cubemap_texture);
+	bindless_resource_manager.register_texture(specular_cubemap_texture);
 
 	bindless_resource_manager.register_texture(hdr_equirectangular_texture);
+	bindless_resource_manager.register_texture(specular_lut_texture);
 
 	ID3D12DescriptorHeap* bindless_heaps[] = { bindless_resource_manager.bindless_descriptor_heap.Get()};
 
@@ -586,6 +620,28 @@ int main()
 	
 	Mesh cube(gpu_memory_allocator, cube_vertices, cube_indices);
 
+	//Setup Quad
+	struct QuadVertex
+	{
+		XMFLOAT2 position;
+		XMFLOAT2 uv;
+	};
+
+	std::vector<QuadVertex> quad_vertices =
+	{
+		{{-1.0f, 1.0f}, {0.0f, 1.0f}},
+		{{-1.0f,-1.0f}, {0.0f, 0.0f}},
+		{{ 1.0f, 1.0f}, {1.0f, 1.0f}},
+		{{ 1.0f,-1.0f}, {1.0f, 0.0f}},
+	};
+
+	std::vector<UINT> quad_indices =
+	{
+		0, 1, 2, 1, 2, 3
+    };
+
+	Mesh quad(gpu_memory_allocator, quad_vertices, quad_indices);
+
 	auto render_to_cubemap_rtv_formats = { cubemap_format, cubemap_format, cubemap_format,
 																	   cubemap_format, cubemap_format, cubemap_format };
 
@@ -599,19 +655,39 @@ int main()
 		.with_debug_name(L"spherical_to_cube_pipeline_state")
         .build(device);
 
-	ComPtr<ID3D12PipelineState> convolute_cubemap_pipeline_state = GraphicsPipelineBuilder()
+	ComPtr<ID3D12PipelineState> diffuse_convolution_pipeline_state = GraphicsPipelineBuilder()
 	    .with_root_signature(bindless_root_signature)
-	    .with_vs(compile_shader(L"data/shaders/convolute_cubemap.hlsl", "vs_main", "vs_5_1"))
-	    .with_ps(compile_shader(L"data/shaders/convolute_cubemap.hlsl", "ps_main", "ps_5_1"))
+	    .with_vs(compile_shader(L"data/shaders/diffuse_convolution.hlsl", "vs_main", "vs_5_1"))
+	    .with_ps(compile_shader(L"data/shaders/diffuse_convolution.hlsl", "ps_main", "ps_5_1"))
 	    .with_depth_enabled(false)
 	    .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
 	    .with_rtv_formats(render_to_cubemap_rtv_formats)
-	    .with_debug_name(L"convolute_cubemap_pipeline_state")
+	    .with_debug_name(L"diffuse_convolution_pipeline_state")
 	    .build(device);
+
+	ComPtr<ID3D12PipelineState> specular_prefilter_pipeline_state = GraphicsPipelineBuilder()
+        .with_root_signature(bindless_root_signature)
+        .with_vs(compile_shader(L"data/shaders/specular_prefilter.hlsl", "vs_main", "vs_5_1"))
+        .with_ps(compile_shader(L"data/shaders/specular_prefilter.hlsl", "ps_main", "ps_5_1"))
+        .with_depth_enabled(false)
+        .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
+        .with_rtv_formats(render_to_cubemap_rtv_formats)
+        .with_debug_name(L"specular_prefilter_pipeline_state")
+        .build(device);
+
+	ComPtr<ID3D12PipelineState> specular_lut_pipeline_state = GraphicsPipelineBuilder()
+        .with_root_signature(bindless_root_signature)
+        .with_vs(compile_shader(L"data/shaders/brdf_lut.hlsl", "vs_main", "vs_5_1"))
+        .with_ps(compile_shader(L"data/shaders/brdf_lut.hlsl", "ps_main", "ps_5_1"))
+        .with_depth_enabled(false)
+        .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
+        .with_rtv_formats({DXGI_FORMAT_R16G16_FLOAT})
+        .with_debug_name(L"specular_lut_pipeline_state")
+        .build(device);
 
 	TConstantBuffer<SceneConstantBuffer> spherical_to_cube_scene(gpu_memory_allocator);
 	TConstantBuffer<InstanceConstantBuffer> spherical_to_cube_instance(gpu_memory_allocator);
-	TConstantBuffer<InstanceConstantBuffer> convolute_cube_instance(gpu_memory_allocator);
+	TConstantBuffer<InstanceConstantBuffer> diffuse_convolution_instance(gpu_memory_allocator);
 
 	XMVECTOR cube_cam_pos	  = XMVectorSet(0.f, 0.f, 0.f, 1.f);
 	XMVECTOR cube_cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);
@@ -622,7 +698,16 @@ int main()
 	spherical_to_cube_cbuffer_data.proj = XMMatrixIdentity();
 	
 	spherical_to_cube_instance.data().texture_index = hdr_equirectangular_texture.bindless_index;
-	convolute_cube_instance.data().texture_index = hdr_cubemap_texture.bindless_index;
+	diffuse_convolution_instance.data().texture_index = hdr_cubemap_texture.bindless_index;
+
+	
+	TConstantBufferArray<SpecularPrefilterConstantBuffer, prefilter_mip_levels> specular_prefilter_instance(gpu_memory_allocator);
+	for (size_t mip_index = 0; mip_index < prefilter_mip_levels; ++mip_index)
+	{
+		auto& data = specular_prefilter_instance.data(mip_index);
+		data.texture_index = hdr_cubemap_texture.bindless_index;
+		data.roughness = static_cast<float>(mip_index) / static_cast<float>(prefilter_mip_levels - 1);
+	}
 
 	//Reset command list using this frame's command allocator
 	HR_CHECK(command_allocators[frame_resources.frame_index]->Reset());
@@ -675,10 +760,10 @@ int main()
 		command_list->ResourceBarrier(1, &ibl_cubemap_rt_barrier);
 	
 		//convolution pipeline
-		command_list->SetPipelineState(convolute_cubemap_pipeline_state.Get());
+		command_list->SetPipelineState(diffuse_convolution_pipeline_state.Get());
 
 		//Slot 1: convolution instance cbuffer
-		command_list->SetGraphicsRootConstantBufferView(1, convolute_cube_instance.get_gpu_virtual_address());
+		command_list->SetGraphicsRootConstantBufferView(1, diffuse_convolution_instance.get_gpu_virtual_address());
 
 		command_list->OMSetRenderTargets(static_cast<UINT>(ibl_cubemap_texture.rtv_handles.size()), ibl_cubemap_texture.rtv_handles.data(), FALSE, nullptr);
 
@@ -694,10 +779,85 @@ int main()
 		const D3D12_RECT scissor_rect = { 0, 0, static_cast<LONG>(ibl_cube_size), static_cast<LONG>(ibl_cube_size) };
 		command_list->RSSetScissorRects(1, &scissor_rect);
 
-		command_list->DrawIndexedInstanced(cube.index_count(), 6, 0, 0, 0);
+		command_list->IASetVertexBuffers(0, 1, &cube.vertex_buffer_view);
+		command_list->IASetIndexBuffer(&cube.index_buffer_view);
+		command_list->DrawIndexedInstanced(cube.index_count(), 1, 0, 0, 0);
 
 		auto ibl_pixel_shader_barrier = CD3DX12_RESOURCE_BARRIER::Transition(ibl_cubemap_texture.resource.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 		command_list->ResourceBarrier(1, &ibl_pixel_shader_barrier);
+	}
+
+	//Specular Prefilter
+	/*
+	 *		TODO: Generate + use mips of hdr_cubemap_texture
+	 *		"One option is to further increase the sample count, but this won't be enough for all environments. As described
+	 *		 by Chetan Jags we can reduce this artifact by (during the pre-filter convolution) not directly sampling the
+	 *		 environment map, but sampling a mip level of the environment map based on the integral's PDF and the roughness:
+	 */
+	{
+		auto specular_cubemap_rt_barrier = CD3DX12_RESOURCE_BARRIER::Transition(specular_cubemap_texture.resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+		command_list->ResourceBarrier(1, &specular_cubemap_rt_barrier);
+	
+		for (size_t mip_index = 0; mip_index < prefilter_mip_levels; ++mip_index)
+		{
+			command_list->SetPipelineState(specular_prefilter_pipeline_state.Get());
+
+			//Slot 1: specular prefilter instance cbuffer
+			command_list->SetGraphicsRootConstantBufferView(1, specular_prefilter_instance.get_gpu_virtual_address(mip_index));
+
+			command_list->OMSetRenderTargets(static_cast<UINT>(specular_cubemap_texture.per_mip_rtv_handles[mip_index].size()), specular_cubemap_texture.per_mip_rtv_handles[mip_index].data(), FALSE, nullptr);
+
+			const UINT mip_width  = specular_cube_size * powf(0.5f, mip_index);
+			const UINT mip_height = specular_cube_size * powf(0.5f, mip_index);
+
+			D3D12_VIEWPORT viewport = {};
+			viewport.TopLeftX = 0.0f;
+			viewport.TopLeftY = 0.0f;
+			viewport.Width = static_cast<float>(mip_width);
+			viewport.Height = static_cast<float>(mip_height);
+			viewport.MinDepth = 0.0f;
+			viewport.MaxDepth = 1.0f;
+			command_list->RSSetViewports(1, &viewport);
+
+			const D3D12_RECT scissor_rect = { 0, 0, static_cast<LONG>(mip_width), static_cast<LONG>(mip_height) };
+			command_list->RSSetScissorRects(1, &scissor_rect);
+
+			command_list->IASetVertexBuffers(0, 1, &cube.vertex_buffer_view);
+			command_list->IASetIndexBuffer(&cube.index_buffer_view);
+			command_list->DrawIndexedInstanced(cube.index_count(), 1, 0, 0, 0);
+		}
+
+		auto specular_pixel_shader_barrier = CD3DX12_RESOURCE_BARRIER::Transition(specular_cubemap_texture.resource.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+		command_list->ResourceBarrier(1, &specular_pixel_shader_barrier);
+	}
+
+	//Specular LUT
+	{
+		auto rt_barrier = CD3DX12_RESOURCE_BARRIER::Transition(specular_lut_texture.resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+		command_list->ResourceBarrier(1, &rt_barrier);
+	
+		command_list->SetPipelineState(specular_lut_pipeline_state.Get());
+
+		command_list->OMSetRenderTargets(1, specular_lut_texture.rtv_handles.data(), FALSE, nullptr);
+
+		D3D12_VIEWPORT viewport = {};
+		viewport.TopLeftX = 0.0f;
+		viewport.TopLeftY = 0.0f;
+		viewport.Width = static_cast<float>(specular_lut_size);
+		viewport.Height = static_cast<float>(specular_lut_size);
+		viewport.MinDepth = 0.0f;
+		viewport.MaxDepth = 1.0f;
+		command_list->RSSetViewports(1, &viewport);
+
+		const D3D12_RECT scissor_rect = { 0, 0, static_cast<LONG>(specular_lut_size), static_cast<LONG>(specular_lut_size) };
+		command_list->RSSetScissorRects(1, &scissor_rect);
+
+		command_list->IASetVertexBuffers(0, 1, &quad.vertex_buffer_view);
+		command_list->IASetIndexBuffer(&quad.index_buffer_view);
+		command_list->DrawIndexedInstanced(quad.index_count(), 1, 0, 0, 0);
+
+		auto pixel_shader_barrier = CD3DX12_RESOURCE_BARRIER::Transition(specular_lut_texture.resource.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+		command_list->ResourceBarrier(1, &pixel_shader_barrier);
 	}
 
 	HR_CHECK(command_list->Close());
@@ -709,10 +869,11 @@ int main()
 
 	spherical_to_cube_scene.release();
 	spherical_to_cube_instance.release();
-	convolute_cube_instance.release();
+	diffuse_convolution_instance.release();
+	specular_prefilter_instance.release();
 
 	uint32_t model_to_render = 0;
-	const char* model_paths[3] = {"data/meshes/sphere.glb", "data/meshes/Monkey.glb", "data/meshes/LunaMoth.glb"};
+	const char* model_paths[] = {"data/meshes/sphere.glb", "data/meshes/Monkey.glb", "data/meshes/LunaMoth.glb"};
 
 	std::vector<std::vector<Mesh>> models;
 
@@ -756,7 +917,7 @@ int main()
 				GpuVertex vertex;
 				memcpy(&vertex.position, positions_buffer, positions_byte_stride);
 				memcpy(&vertex.normal, normals_buffer, normals_byte_stride);
-				vertex.color = XMFLOAT4(0.2f, 0.2f, 0.2f, 1.0f);
+				vertex.color = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
 				memcpy(&vertex.uv, uvs_buffer, uvs_byte_stride);
 		
 				positions_buffer += positions_byte_stride;
@@ -788,21 +949,26 @@ int main()
 		models.push_back(meshes);
 	}
 
-	TPerFrameConstantBuffer<SceneConstantBuffer, backbuffer_count> scene_constant_buffers(gpu_memory_allocator);
+	TConstantBufferArray<SceneConstantBuffer, backbuffer_count> scene_constant_buffers(gpu_memory_allocator);
 
 	//Eventually these will hold per-frame data (transform, etc.)
-	TPerFrameConstantBuffer<InstanceConstantBuffer, backbuffer_count> mesh_constant_buffers(gpu_memory_allocator);
-	TPerFrameConstantBuffer<InstanceConstantBuffer, backbuffer_count> skybox_constant_buffers(gpu_memory_allocator);
+	TConstantBufferArray<MeshRenderConstantBuffer, backbuffer_count> mesh_constant_buffers(gpu_memory_allocator);
+	TConstantBufferArray<InstanceConstantBuffer, backbuffer_count> skybox_constant_buffers(gpu_memory_allocator);
 
 	//fill texture indices on instance data
 	for (size_t i = 0; i < backbuffer_count; ++i)
 	{
-		mesh_constant_buffers.data(i).texture_index = ibl_cubemap_texture.bindless_index;
+		auto& data = mesh_constant_buffers.data(i);
+		data.diffuse_ibl_texture_index = ibl_cubemap_texture.bindless_index;
+		data.specular_ibl_texture_index = specular_cubemap_texture.bindless_index;
+		data.specular_ibl_mip_count = specular_cubemap_texture.resource->GetDesc().MipLevels;
+		data.specular_lut_texture_index = specular_lut_texture.bindless_index;
 	}
 
 	XMVECTOR cam_pos	 = XMVectorSet(0.f, -10.f, 30.f, 1.f);
 	XMVECTOR cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);
 	XMVECTOR cam_up		 = XMVectorSet(0.f, 1.f, 0.f, 0.f);
+	XMVECTOR world_up	 = XMVectorSet(0.f, 1.f, 0.f, 0.f);
 
 	clock_t time = clock();
 	double accumulated_delta_time = 0.0f;
@@ -810,13 +976,15 @@ int main()
 
 	POINT last_mouse_pos = {};
 
-	bool show_convoluted_cubemap = false;
+	Texture* current_skybox_texture = &hdr_cubemap_texture;
+	int skybox_texture_lod = 0;
+	
 	int mesh_instance_count = 100;
 	
 	bool should_close = false;
 	bool vsync_enabled = true;
 	
-	while (!should_close)
+	while (!should_close && IsWindow(window))
 	{	
 		RECT client_rect;
 		if (GetClientRect(window, &client_rect))
@@ -871,7 +1039,38 @@ int main()
 
 			ImGui::Checkbox("vsync", &vsync_enabled);
 
-			ImGui::Checkbox("Show Convolution", &show_convoluted_cubemap);
+			const char* current_skybox_texture_name = current_skybox_texture ? current_skybox_texture->get_name() : "None Selected";
+			if (ImGui::BeginCombo("Skybox texture", current_skybox_texture_name))
+			{
+				Texture* cubemap_textures[] = {&hdr_cubemap_texture, &ibl_cubemap_texture, &specular_cubemap_texture};
+				for (uint32_t i = 0; i < _countof(cubemap_textures); ++i)
+				{
+					const int current_index = current_skybox_texture ? current_skybox_texture->bindless_index : INVALID_INDEX;
+					const bool is_selected = current_index != INVALID_INDEX && cubemap_textures[i]->bindless_index == current_index;
+					
+					if (ImGui::Selectable(cubemap_textures[i]->get_name(), is_selected))
+					{
+						current_skybox_texture = cubemap_textures[i];
+					}
+
+					if (is_selected)
+					{
+						ImGui::SetItemDefaultFocus();
+					}
+				}
+
+				ImGui::EndCombo();
+			}
+
+			if (current_skybox_texture != nullptr)
+			{
+				auto resource_desc = current_skybox_texture->resource->GetDesc();
+				if (ImGui::SliderInt("SkyBox LOD", &skybox_texture_lod, 0, resource_desc.MipLevels - 1))
+				{
+					skybox_texture_lod = max(0, skybox_texture_lod);
+				}
+			}
+
 
 			if (ImGui::BeginCombo("Model to Render", model_paths[static_cast<size_t>(model_to_render)]))
 			{
@@ -892,11 +1091,13 @@ int main()
 				ImGui::EndCombo();
 			}
 
-			ImGui::SliderInt("Model Instance Count", &mesh_instance_count, 0, 100);
+			ImGui::SliderInt("Instances", &mesh_instance_count, 1, 100);
 
 			ImGui::Render();
 
-			{	//Camera Control
+			if (window == GetFocus())
+			{
+				//Free-Camera Controls
 				const XMVECTOR cam_right = XMVector3Normalize(XMVector3Cross(cam_up, cam_forward));
 				
 				float translation_speed = 6.0f * static_cast<float>(delta_time);
@@ -917,11 +1118,17 @@ int main()
 				{
 					const float rot_rate = 4.0f;
 
-					auto pitch_rot = XMMatrixRotationAxis( cam_right, rot_rate * mouse_delta_y);
-					auto yaw_rot = XMMatrixRotationAxis( cam_up, rot_rate * mouse_delta_x);
+					auto pitch_rot = XMMatrixRotationAxis(cam_right, rot_rate * mouse_delta_y);
+					auto yaw_rot = XMMatrixRotationAxis(world_up, rot_rate * mouse_delta_x);
 					auto total_rot = XMMatrixMultiply(pitch_rot, yaw_rot);
 					
 					cam_forward = XMVector3Transform(cam_forward, total_rot);
+					cam_up = XMVector3Transform(cam_up, total_rot);
+				}
+				
+				if (is_key_down(VK_ESCAPE))
+				{
+					should_close = true;
 				}
 			}
 
@@ -937,11 +1144,12 @@ int main()
 			scene_cbuffer_data.cam_pos = cam_pos;
 			scene_cbuffer_data.cam_dir = cam_forward;
 
-			skybox_constant_buffers.data(frame_resources.frame_index).texture_index = show_convoluted_cubemap ? ibl_cubemap_texture.bindless_index : hdr_cubemap_texture.bindless_index;
+			skybox_constant_buffers.data(frame_resources.frame_index).texture_index = current_skybox_texture->bindless_index;
+			skybox_constant_buffers.data(frame_resources.frame_index).texture_lod = skybox_texture_lod;
 
 			HR_CHECK(command_allocators[frame_resources.frame_index]->Reset());
 
-			HR_CHECK(command_list->Reset(command_allocators[frame_resources.frame_index].Get(), pipeline_state.Get()));
+			HR_CHECK(command_list->Reset(command_allocators[frame_resources.frame_index].Get(), pbr_pipeline_state.Get()));
 
 			// Set necessary state.
 			command_list->SetGraphicsRootSignature(bindless_root_signature.Get());
@@ -1026,11 +1234,6 @@ int main()
 			const UINT sync_interval = vsync_enabled ? 1 : 0;
 			HR_CHECK(frame_resources.swapchain->Present(sync_interval, 0));
 		}
-
-		if (is_key_down(VK_ESCAPE) || !IsWindow(window) )
-		{
-			should_close = true;
-		}
 	}
 
 	wait_gpu_idle(device, command_queue);
@@ -1044,6 +1247,8 @@ int main()
 		
 		hdr_cubemap_texture.release();
 		ibl_cubemap_texture.release();
+		specular_cubemap_texture.release();
+		specular_lut_texture.release();
 
 		for (auto& meshes : models)
 		{
@@ -1054,6 +1259,7 @@ int main()
 		}
 
 		cube.release();
+		quad.release();
 
 		scene_constant_buffers.release();
 		mesh_constant_buffers.release();

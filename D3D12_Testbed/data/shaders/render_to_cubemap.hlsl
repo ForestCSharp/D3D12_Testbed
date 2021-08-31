@@ -1,7 +1,7 @@
 #include "math.hlsl"
 
 #include "scene.hlsl"
-#include "instance.hlsl"
+#include "instance.hlsl" //TODO: Remove
 #include "bindless.hlsl"
 
 SamplerState hdr_sampler : register(s0);
@@ -52,13 +52,12 @@ PsInput vs_main(const float3 position : POSITION, const float3 normal : NORMAL, 
 
 struct PsOutput
 {
-	//TODO: FIX Names
-    float4 front: SV_Target0;
-    float4 back: SV_Target1;
-    float4 top: SV_Target2;
-    float4 bottom: SV_Target3;
-    float4 left: SV_Target4;
-    float4 right: SV_Target5;
+    float4 rt_0: SV_Target0;
+    float4 rt_1: SV_Target1;
+    float4 rt_2: SV_Target2;
+    float4 rt_3: SV_Target3;
+    float4 rt_4: SV_Target4;
+    float4 rt_5: SV_Target5;
 };
 
 PsOutput ps_main(const PsInput input) : SV_TARGET
@@ -67,19 +66,19 @@ PsOutput ps_main(const PsInput input) : SV_TARGET
 
     float3 sample_dir = normalize(input.world_pos);
 
-    output.front   = sample_spherical_map(sample_dir);
-    output.back    = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 180));
+    output.rt_0		= sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), -90));
+    output.rt_1     = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 90));
 
-	float3 top_dir = float3_rotate_angle_axis(sample_dir, float3(0,0,1), 90);
-	top_dir 	   = float3_rotate_angle_axis(top_dir, float3(1,0,0), 90);
-    output.top     = sample_spherical_map(top_dir);
+	float3 rt_2_dir = float3_rotate_angle_axis(sample_dir, float3(0,0,1), 180);
+	rt_2_dir        = float3_rotate_angle_axis(rt_2_dir, float3(1,0,0), 90);
+    output.rt_2     = sample_spherical_map(rt_2_dir);
 
-	float3 bot_dir = float3_rotate_angle_axis(sample_dir, float3(0,0,1), -90);
-	bot_dir 	   = float3_rotate_angle_axis(bot_dir, float3(1,0,0), -90);
-    output.bottom  = sample_spherical_map(bot_dir);
+	float3 rt_3_dir = float3_rotate_angle_axis(sample_dir, float3(0,0,1), -180);
+	rt_3_dir        = float3_rotate_angle_axis(rt_3_dir, float3(1,0,0), -90);
+    output.rt_3     = sample_spherical_map(rt_3_dir);
 
-    output.left    = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), -90));
-    output.right   = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 90));
+    output.rt_4     = sample_spherical_map(float3_rotate_angle_axis(sample_dir, float3(0,1,0), 180));
+    output.rt_5     = sample_spherical_map(sample_dir);
 
     return output;
 }
