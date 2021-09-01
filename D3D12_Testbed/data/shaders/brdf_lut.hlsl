@@ -1,7 +1,6 @@
 #include "math.hlsl"
 #include "brdf.hlsl"
 
-
 float2 IntegrateBRDF(float NdotV, float roughness)
 {
     float3 V;
@@ -14,7 +13,7 @@ float2 IntegrateBRDF(float NdotV, float roughness)
 
     float3 N = float3(0.0, 0.0, 1.0);
 
-    const uint SAMPLE_COUNT = 1024u;
+    const uint SAMPLE_COUNT = 1024;
     for(uint i = 0u; i < SAMPLE_COUNT; ++i)
     {
         float2 Xi = hammersley_sequence(i, SAMPLE_COUNT);

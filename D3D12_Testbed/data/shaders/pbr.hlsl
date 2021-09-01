@@ -109,14 +109,13 @@ float4 ps_main(const PsInput input) : SV_TARGET
     }
 
     float n_dot_v = saturate(dot(normal, view_dir));
-
-    //Diffuse IBL
-    const float3 irradiance = TextureCubeTable[diffuse_ibl_texture_index].Sample(texture_sampler, normal).rgb;
-
     float3 F = fresnel_schlick_roughness(n_dot_v, f0, roughness);
     const float3 ks = F;
     float3 kd = 1.0 - ks;
-    kd *= 1.0 - metallic;
+    kd *= (1.0 - metallic);
+
+    //Diffuse IBL
+	const float3 irradiance = TextureCubeTable[diffuse_ibl_texture_index].Sample(texture_sampler, normal).rgb;
     const float3 diffuse = irradiance * albedo;
 
     //Specular IBL

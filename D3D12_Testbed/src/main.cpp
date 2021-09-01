@@ -517,6 +517,9 @@ int main()
 
 		std::array<CD3DX12_STATIC_SAMPLER_DESC, 1> samplers;
 		samplers[0].Init(0, D3D12_FILTER_MIN_MAG_MIP_LINEAR);
+		samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		samplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		samplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
 
 		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_signature_desc;
 		root_signature_desc.Init_1_0(static_cast<UINT>(root_parameters.size()), root_parameters.data(),
@@ -578,8 +581,12 @@ int main()
 	specular_cubemap_texture.set_is_cubemap(true);
 
 	const UINT specular_lut_size = 512;
-	Texture specular_lut_texture(device, gpu_memory_allocator, DXGI_FORMAT_R16G16_FLOAT, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, specular_lut_size, specular_lut_size, 1);
+	const DXGI_FORMAT specular_lut_format = DXGI_FORMAT_R16G16_FLOAT;
+	Texture specular_lut_texture(device, gpu_memory_allocator, specular_lut_format, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, specular_lut_size, specular_lut_size, 1);
 	specular_lut_texture.set_name("Specular LUT Texture");
+
+	Texture reference_lut(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, "data/textures/Reference_Lut.png");
+	reference_lut.set_name("REFERENCE LUT");
 
 	BindlessResourceManager bindless_resource_manager(device, gpu_memory_allocator);
 
@@ -590,6 +597,7 @@ int main()
 
 	bindless_resource_manager.register_texture(hdr_equirectangular_texture);
 	bindless_resource_manager.register_texture(specular_lut_texture);
+	bindless_resource_manager.register_texture(reference_lut);
 
 	ID3D12DescriptorHeap* bindless_heaps[] = { bindless_resource_manager.bindless_descriptor_heap.Get()};
 
@@ -629,10 +637,10 @@ int main()
 
 	std::vector<QuadVertex> quad_vertices =
 	{
-		{{-1.0f, 1.0f}, {0.0f, 1.0f}},
-		{{-1.0f,-1.0f}, {0.0f, 0.0f}},
-		{{ 1.0f, 1.0f}, {1.0f, 1.0f}},
-		{{ 1.0f,-1.0f}, {1.0f, 0.0f}},
+		{{-1.0f, 1.0f}, {0.0f, 0.0f}},
+		{{-1.0f,-1.0f}, {0.0f, 1.0f}},
+		{{ 1.0f, 1.0f}, {1.0f, 0.0f}},
+		{{ 1.0f,-1.0f}, {1.0f, 1.0f}},
 	};
 
 	std::vector<UINT> quad_indices =
@@ -681,9 +689,11 @@ int main()
         .with_ps(compile_shader(L"data/shaders/brdf_lut.hlsl", "ps_main", "ps_5_1"))
         .with_depth_enabled(false)
         .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
-        .with_rtv_formats({DXGI_FORMAT_R16G16_FLOAT})
+        .with_rtv_formats({specular_lut_format})
         .with_debug_name(L"specular_lut_pipeline_state")
         .build(device);
+
+	//TODO: FIXME: ^^^ resulting LUT still off (as compared to reference)
 
 	TConstantBuffer<SceneConstantBuffer> spherical_to_cube_scene(gpu_memory_allocator);
 	TConstantBuffer<InstanceConstantBuffer> spherical_to_cube_instance(gpu_memory_allocator);
@@ -978,8 +988,11 @@ int main()
 
 	Texture* current_skybox_texture = &hdr_cubemap_texture;
 	int skybox_texture_lod = 0;
+	bool draw_skybox = true;
 	
 	int mesh_instance_count = 100;
+
+	bool use_reference_lut = false;
 	
 	bool should_close = false;
 	bool vsync_enabled = true;
@@ -1039,6 +1052,8 @@ int main()
 
 			ImGui::Checkbox("vsync", &vsync_enabled);
 
+			ImGui::Checkbox("Draw Skybox", &draw_skybox);
+
 			const char* current_skybox_texture_name = current_skybox_texture ? current_skybox_texture->get_name() : "None Selected";
 			if (ImGui::BeginCombo("Skybox texture", current_skybox_texture_name))
 			{
@@ -1047,7 +1062,7 @@ int main()
 				{
 					const int current_index = current_skybox_texture ? current_skybox_texture->bindless_index : INVALID_INDEX;
 					const bool is_selected = current_index != INVALID_INDEX && cubemap_textures[i]->bindless_index == current_index;
-					
+				
 					if (ImGui::Selectable(cubemap_textures[i]->get_name(), is_selected))
 					{
 						current_skybox_texture = cubemap_textures[i];
@@ -1071,7 +1086,6 @@ int main()
 				}
 			}
 
-
 			if (ImGui::BeginCombo("Model to Render", model_paths[static_cast<size_t>(model_to_render)]))
 			{
 				for (uint32_t i = 0; i < models.size(); ++i)
@@ -1092,6 +1106,8 @@ int main()
 			}
 
 			ImGui::SliderInt("Instances", &mesh_instance_count, 1, 100);
+
+			ImGui::Checkbox("Use Reference LUT", &use_reference_lut);
 
 			ImGui::Render();
 
@@ -1147,6 +1163,8 @@ int main()
 			skybox_constant_buffers.data(frame_resources.frame_index).texture_index = current_skybox_texture->bindless_index;
 			skybox_constant_buffers.data(frame_resources.frame_index).texture_lod = skybox_texture_lod;
 
+			mesh_constant_buffers.data(frame_resources.frame_index).specular_lut_texture_index = use_reference_lut ? reference_lut.bindless_index : specular_lut_texture.bindless_index;
+
 			HR_CHECK(command_allocators[frame_resources.frame_index]->Reset());
 
 			HR_CHECK(command_list->Reset(command_allocators[frame_resources.frame_index].Get(), pbr_pipeline_state.Get()));
@@ -1191,7 +1209,7 @@ int main()
 			command_list->OMSetRenderTargets(1, &rtv_handle, FALSE, &depth_handle);
 			command_list->ClearDepthStencilView(depth_handle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 			
-			const float clear_color[] = { 0.0f, 0.1f, 0.2f, 1.0f };
+			const float clear_color[] = { 0.1f, 0.1f, 0.1f, 1.0f };
 			command_list->ClearRenderTargetView(rtv_handle, clear_color, 0, nullptr);
 			command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 			
@@ -1203,6 +1221,7 @@ int main()
 			}
 
 			//Render Skybox
+			if (draw_skybox)
 			{
 				//Set Pipeline State
 				command_list->SetPipelineState(skybox_pipeline_state.Get());
@@ -1249,6 +1268,7 @@ int main()
 		ibl_cubemap_texture.release();
 		specular_cubemap_texture.release();
 		specular_lut_texture.release();
+		reference_lut.release();
 
 		for (auto& meshes : models)
 		{
