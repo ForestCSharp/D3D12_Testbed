@@ -1072,65 +1072,74 @@ int main()
 
 			ImGui::Checkbox("vsync", &vsync_enabled);
 
-			ImGui::Checkbox("Draw Skybox", &draw_skybox);
-
-			const char* current_skybox_texture_name = current_skybox_texture ? current_skybox_texture->get_name() : "None Selected";
-			if (ImGui::BeginCombo("Skybox texture", current_skybox_texture_name))
+			if (ImGui::CollapsingHeader("Skybox"))
 			{
-				Texture* cubemap_textures[] = {&hdr_cubemap_texture, &ibl_cubemap_texture, &specular_cubemap_texture};
-				for (uint32_t i = 0; i < _countof(cubemap_textures); ++i)
+				ImGui::Indent();
+				ImGui::Checkbox("Draw Skybox", &draw_skybox);
+
+				const char* current_skybox_texture_name = current_skybox_texture ? current_skybox_texture->get_name() : "None Selected";
+				if (ImGui::BeginCombo("Skybox texture", current_skybox_texture_name))
 				{
-					const int current_index = current_skybox_texture ? current_skybox_texture->bindless_index : INVALID_INDEX;
-					const bool is_selected = current_index != INVALID_INDEX && cubemap_textures[i]->bindless_index == current_index;
+					Texture* cubemap_textures[] = {&hdr_cubemap_texture, &ibl_cubemap_texture, &specular_cubemap_texture};
+					for (uint32_t i = 0; i < _countof(cubemap_textures); ++i)
+					{
+						const int current_index = current_skybox_texture ? current_skybox_texture->bindless_index : INVALID_INDEX;
+						const bool is_selected = current_index != INVALID_INDEX && cubemap_textures[i]->bindless_index == current_index;
 				
-					if (ImGui::Selectable(cubemap_textures[i]->get_name(), is_selected))
-					{
-						current_skybox_texture = cubemap_textures[i];
+						if (ImGui::Selectable(cubemap_textures[i]->get_name(), is_selected))
+						{
+							current_skybox_texture = cubemap_textures[i];
+						}
+
+						if (is_selected)
+						{
+							ImGui::SetItemDefaultFocus();
+						}
 					}
 
-					if (is_selected)
-					{
-						ImGui::SetItemDefaultFocus();
-					}
+					ImGui::EndCombo();
 				}
 
-				ImGui::EndCombo();
-			}
-
-			if (current_skybox_texture != nullptr)
-			{
-				auto resource_desc = current_skybox_texture->resource->GetDesc();
-				if (ImGui::SliderInt("SkyBox LOD", &skybox_texture_lod, 0, resource_desc.MipLevels - 1))
+				if (current_skybox_texture != nullptr)
 				{
-					skybox_texture_lod = max(0, skybox_texture_lod);
+					auto resource_desc = current_skybox_texture->resource->GetDesc();
+					if (ImGui::SliderInt("SkyBox LOD", &skybox_texture_lod, 0, resource_desc.MipLevels - 1))
+					{
+						skybox_texture_lod = max(0, skybox_texture_lod);
+					}
 				}
+				ImGui::Unindent();
 			}
 
-			if (ImGui::BeginCombo("Model to Render", model_paths[static_cast<size_t>(model_to_render)]))
+			if (ImGui::CollapsingHeader("Model"))
 			{
-				for (uint32_t i = 0; i < models.size(); ++i)
+				ImGui::Indent();
+				if (ImGui::BeginCombo("Model to Render", model_paths[static_cast<size_t>(model_to_render)]))
 				{
-					const bool is_selected = i == model_to_render;
-					if (ImGui::Selectable(model_paths[i], is_selected))
+					for (uint32_t i = 0; i < models.size(); ++i)
 					{
-						model_to_render = i;
+						const bool is_selected = i == model_to_render;
+						if (ImGui::Selectable(model_paths[i], is_selected))
+						{
+							model_to_render = i;
+						}
+
+						if (is_selected)
+						{
+							ImGui::SetItemDefaultFocus();
+						}
 					}
 
-					if (is_selected)
-					{
-						ImGui::SetItemDefaultFocus();
-					}
+					ImGui::EndCombo();
 				}
 
-				ImGui::EndCombo();
+				ImGui::SliderInt("Instances", &mesh_instance_count, 1, 100);
+				ImGui::Unindent();
 			}
 
-			ImGui::SliderInt("Instances", &mesh_instance_count, 1, 100);
-
-			ImGui::Checkbox("Use Reference LUT", &use_reference_lut);
-
-			if (ImGui::CollapsingHeader("Texture Debug View", ImGuiTreeNodeFlags_DefaultOpen))
+			if (ImGui::CollapsingHeader("Texture Debug View"))
 			{
+				ImGui::Indent();
 				ImGui::Checkbox("Draw Debug Texture", &draw_debug_view_texture);
 
 				const char* debug_view_texture_name = debug_view_texture ? debug_view_texture->get_name() : "None Selected";
@@ -1161,7 +1170,10 @@ int main()
 				{
 					debug_view_texture_size = static_cast<UINT>(tmp);
 				}
+				ImGui::Unindent();
 			}
+
+			ImGui::Checkbox("Use Reference LUT", &use_reference_lut);
 
 			ImGui::Render();
 
