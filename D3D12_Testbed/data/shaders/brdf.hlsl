@@ -18,11 +18,11 @@ float distribution_ggx(const float n_dot_h, const float roughness)
 
 float geometry_schlick_ggx(const float n_dot_v, const float roughness)
 {
-    const float r = roughness + 1.0;
-    const float k = (r*r) / 8.0;
+    float a = roughness;
+    float k = (a * a) / 2.0;
 
-    const float nom   = n_dot_v;
-    const float denom = n_dot_v * (1.0 - k) + k;
+    float nom = n_dot_v;
+    float denom = n_dot_v * (1.0 - k) + k;
 
     return nom / denom;
 }

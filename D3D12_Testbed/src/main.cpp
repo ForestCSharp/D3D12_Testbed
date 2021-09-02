@@ -1010,9 +1010,9 @@ int main()
 
 	bool use_reference_lut = false;
 
-	Texture* debug_view_texture = &specular_lut_texture;
-	bool draw_debug_view_texture = false;
-	UINT debug_view_texture_size = 500;
+	Texture* debug_texture = &specular_lut_texture;
+	bool draw_debug_texture = false;
+	UINT debug_texture_size = 500;
 	
 	bool should_close = false;
 	bool vsync_enabled = true;
@@ -1140,20 +1140,20 @@ int main()
 			if (ImGui::CollapsingHeader("Texture Debug View"))
 			{
 				ImGui::Indent();
-				ImGui::Checkbox("Draw Debug Texture", &draw_debug_view_texture);
+				ImGui::Checkbox("Draw Debug Texture", &draw_debug_texture);
 
-				const char* debug_view_texture_name = debug_view_texture ? debug_view_texture->get_name() : "None Selected";
+				const char* debug_view_texture_name = debug_texture ? debug_texture->get_name() : "None Selected";
 				if (ImGui::BeginCombo("Texture to View", debug_view_texture_name))
 				{
 					Texture* debug_view_textures[] = {&specular_lut_texture, &reference_lut};
 					for (uint32_t i = 0; i < _countof(debug_view_textures); ++i)
 					{
-						const int current_index = debug_view_texture ? debug_view_texture->bindless_index : INVALID_INDEX;
+						const int current_index = debug_texture ? debug_texture->bindless_index : INVALID_INDEX;
 						const bool is_selected = current_index != INVALID_INDEX && debug_view_textures[i]->bindless_index == current_index;
 				
 						if (ImGui::Selectable(debug_view_textures[i]->get_name(), is_selected))
 						{
-							debug_view_texture = debug_view_textures[i];
+							debug_texture = debug_view_textures[i];
 						}
 
 						if (is_selected)
@@ -1165,10 +1165,10 @@ int main()
 					ImGui::EndCombo();
 				}
 
-				int tmp = static_cast<int>(debug_view_texture_size);
-				if (ImGui::SliderInt("Debug Texture Size", &tmp, 0, min(width, height)))
+				int tmp = static_cast<int>(debug_texture_size);
+				if (ImGui::SliderInt("Debug Texture Size", &tmp, 1, min(width, height)))
 				{
-					debug_view_texture_size = static_cast<UINT>(tmp);
+					debug_texture_size = static_cast<UINT>(tmp);
 				}
 				ImGui::Unindent();
 			}
@@ -1231,7 +1231,7 @@ int main()
 
 			mesh_constant_buffers.data(frame_resources.frame_index).specular_lut_texture_index = use_reference_lut ? reference_lut.bindless_index : specular_lut_texture.bindless_index;
 
-			texture_viewer_constant_buffers.data(frame_resources.frame_index).texture_index = debug_view_texture ? debug_view_texture->bindless_index : INVALID_INDEX;
+			texture_viewer_constant_buffers.data(frame_resources.frame_index).texture_index = debug_texture ? debug_texture->bindless_index : INVALID_INDEX;
 
 			HR_CHECK(command_allocators[frame_resources.frame_index]->Reset());
 
@@ -1303,10 +1303,10 @@ int main()
 			}
 
 			//Render Debug Texture TODO: Draw in ImGui?
-			if (draw_debug_view_texture && debug_view_texture != nullptr)
+			if (draw_debug_texture && debug_texture != nullptr)
 			{
 				UINT min_screen_dimension = min(width,height);
-				UINT actual_display_size = min(debug_view_texture_size, min_screen_dimension);
+				UINT actual_display_size = min(debug_texture_size, min_screen_dimension);
 				
 				D3D12_VIEWPORT texture_viewer_viewport = {};
 				texture_viewer_viewport.TopLeftX = 0.0f;
