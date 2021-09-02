@@ -76,8 +76,8 @@ float4 ps_main(const PsInput input) : SV_TARGET
 
     //TODO: per-instance args
     const float3 albedo = input.color.rgb;
-    const float roughness = (float)(input.instance_id / 10) / 10.0;
-    const float metallic  = fmod(input.instance_id, 10) / 10.0;
+    const float roughness = 1.0 - (float)(input.instance_id / 10) / 10.0;
+    const float metallic  = 1.0 - fmod(input.instance_id, 10) / 10.0;
     
     const float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
 

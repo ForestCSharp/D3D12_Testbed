@@ -67,6 +67,12 @@ struct MeshRenderConstantBuffer
 	UINT specular_lut_texture_index;
 };
 
+struct TextureViewerData
+{
+	UINT texture_index = 0;
+	UINT texture_lod = 0;
+};
+
 //TODO: Move to helpers file
 //Templated constant buffer
 template <typename T>
@@ -288,7 +294,6 @@ int main()
 		// Create a command allocator per-frame, which will be used to create our command lists
 		HR_CHECK(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&command_allocators[current_frame_index])));
 	}
-
 
 	//Init ImGui
 	ImGui::CreateContext();
@@ -553,6 +558,16 @@ int main()
 		.with_cull_mode(D3D12_CULL_MODE_NONE)
 		.with_debug_name(L"skybox_pipeline_state")
         .build(device);
+
+	ComPtr<ID3D12PipelineState> texture_viewer_pipeline_state = GraphicsPipelineBuilder()
+	    .with_root_signature(bindless_root_signature)
+	    .with_vs(compile_shader(L"data/shaders/texture_viewer.hlsl", "vs_main", "vs_5_1"))
+	    .with_ps(compile_shader(L"data/shaders/texture_viewer.hlsl", "ps_main", "ps_5_1"))
+	    .with_depth_enabled(false)
+	    .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
+	    .with_rtv_formats({DXGI_FORMAT_R8G8B8A8_UNORM_SRGB})
+	    .with_debug_name(L"texture_viewer_pipeline_state")
+	    .build(device);
 
 	// 12. Create Command list using command allocator and pipeline state, and close it (we'll record it later)
 	ComPtr<ID3D12GraphicsCommandList> command_list;
@@ -964,6 +979,7 @@ int main()
 	//Eventually these will hold per-frame data (transform, etc.)
 	TConstantBufferArray<MeshRenderConstantBuffer, backbuffer_count> mesh_constant_buffers(gpu_memory_allocator);
 	TConstantBufferArray<InstanceConstantBuffer, backbuffer_count> skybox_constant_buffers(gpu_memory_allocator);
+	TConstantBufferArray<TextureViewerData, backbuffer_count> texture_viewer_constant_buffers(gpu_memory_allocator);
 
 	//fill texture indices on instance data
 	for (size_t i = 0; i < backbuffer_count; ++i)
@@ -993,6 +1009,10 @@ int main()
 	int mesh_instance_count = 100;
 
 	bool use_reference_lut = false;
+
+	Texture* debug_view_texture = &specular_lut_texture;
+	bool draw_debug_view_texture = false;
+	UINT debug_view_texture_size = 500;
 	
 	bool should_close = false;
 	bool vsync_enabled = true;
@@ -1109,6 +1129,40 @@ int main()
 
 			ImGui::Checkbox("Use Reference LUT", &use_reference_lut);
 
+			if (ImGui::CollapsingHeader("Texture Debug View", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				ImGui::Checkbox("Draw Debug Texture", &draw_debug_view_texture);
+
+				const char* debug_view_texture_name = debug_view_texture ? debug_view_texture->get_name() : "None Selected";
+				if (ImGui::BeginCombo("Texture to View", debug_view_texture_name))
+				{
+					Texture* debug_view_textures[] = {&specular_lut_texture, &reference_lut};
+					for (uint32_t i = 0; i < _countof(debug_view_textures); ++i)
+					{
+						const int current_index = debug_view_texture ? debug_view_texture->bindless_index : INVALID_INDEX;
+						const bool is_selected = current_index != INVALID_INDEX && debug_view_textures[i]->bindless_index == current_index;
+				
+						if (ImGui::Selectable(debug_view_textures[i]->get_name(), is_selected))
+						{
+							debug_view_texture = debug_view_textures[i];
+						}
+
+						if (is_selected)
+						{
+							ImGui::SetItemDefaultFocus();
+						}
+					}
+
+					ImGui::EndCombo();
+				}
+
+				int tmp = static_cast<int>(debug_view_texture_size);
+				if (ImGui::SliderInt("Debug Texture Size", &tmp, 0, min(width, height)))
+				{
+					debug_view_texture_size = static_cast<UINT>(tmp);
+				}
+			}
+
 			ImGui::Render();
 
 			if (window == GetFocus())
@@ -1164,6 +1218,8 @@ int main()
 			skybox_constant_buffers.data(frame_resources.frame_index).texture_lod = skybox_texture_lod;
 
 			mesh_constant_buffers.data(frame_resources.frame_index).specular_lut_texture_index = use_reference_lut ? reference_lut.bindless_index : specular_lut_texture.bindless_index;
+
+			texture_viewer_constant_buffers.data(frame_resources.frame_index).texture_index = debug_view_texture ? debug_view_texture->bindless_index : INVALID_INDEX;
 
 			HR_CHECK(command_allocators[frame_resources.frame_index]->Reset());
 
@@ -1234,6 +1290,34 @@ int main()
 				command_list->DrawIndexedInstanced(cube.index_count(), 1, 0, 0, 0);
 			}
 
+			//Render Debug Texture TODO: Draw in ImGui?
+			if (draw_debug_view_texture && debug_view_texture != nullptr)
+			{
+				UINT min_screen_dimension = min(width,height);
+				UINT actual_display_size = min(debug_view_texture_size, min_screen_dimension);
+				
+				D3D12_VIEWPORT texture_viewer_viewport = {};
+				texture_viewer_viewport.TopLeftX = 0.0f;
+				texture_viewer_viewport.TopLeftY = 0.0f;
+				texture_viewer_viewport.Width = static_cast<float>(actual_display_size);
+				texture_viewer_viewport.Height = static_cast<float>(actual_display_size);
+				texture_viewer_viewport.MinDepth = 0.0f;
+				texture_viewer_viewport.MaxDepth = 1.0f;
+				command_list->RSSetViewports(1, &texture_viewer_viewport);
+
+				const D3D12_RECT texture_viewer_scissor_rect = { 0, 0, actual_display_size, actual_display_size };
+				command_list->RSSetScissorRects(1, &texture_viewer_scissor_rect);
+				
+				//Set Pipeline State
+				command_list->SetPipelineState(texture_viewer_pipeline_state.Get());
+
+				//Skybox instance cbuffer (only working currently because our cubemap + env indices are identical
+				command_list->SetGraphicsRootConstantBufferView(1, texture_viewer_constant_buffers.get_gpu_virtual_address(frame_resources.frame_index));
+
+				command_list->IASetVertexBuffers(0, 1, &quad.vertex_buffer_view);
+				command_list->IASetIndexBuffer(&quad.index_buffer_view);
+				command_list->DrawIndexedInstanced(quad.index_count(), 1, 0, 0, 0);
+			}
 
 			ID3D12DescriptorHeap* imgui_heaps[] = { imgui_descriptor_heap.Get() };
 			command_list->SetDescriptorHeaps(_countof(imgui_heaps), imgui_heaps);
@@ -1284,6 +1368,7 @@ int main()
 		scene_constant_buffers.release();
 		mesh_constant_buffers.release();
 		skybox_constant_buffers.release();
+		texture_viewer_constant_buffers.release();
 
 		frame_resources.depth_texture_allocation->Release();
 	}
