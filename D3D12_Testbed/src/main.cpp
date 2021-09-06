@@ -832,8 +832,8 @@ int main()
 
 			command_list->OMSetRenderTargets(static_cast<UINT>(specular_cubemap_texture.per_mip_rtv_handles[mip_index].size()), specular_cubemap_texture.per_mip_rtv_handles[mip_index].data(), FALSE, nullptr);
 
-			const UINT mip_width  = specular_cube_size * powf(0.5f, mip_index);
-			const UINT mip_height = specular_cube_size * powf(0.5f, mip_index);
+			const float mip_width  = static_cast<float>(specular_cube_size) * powf(0.5f, mip_index);
+			const float mip_height = static_cast<float>(specular_cube_size) * powf(0.5f, mip_index);
 
 			D3D12_VIEWPORT viewport = {};
 			viewport.TopLeftX = 0.0f;
