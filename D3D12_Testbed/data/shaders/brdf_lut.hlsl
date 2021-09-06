@@ -53,7 +53,7 @@ PsInput vs_main(const float2 position : POSITION, const  float2 uv : TEXCOORD0)
     return ps_input;
 }
 
-//TODO: FIXME: this seems to match it up with the reference
+//TODO: FIXME: this seems to match it up with the reference, but that's likely because the reference is stored in SRGB, this should probably be removed
 static const float SRGB_INVERSE_GAMMA = 2.2;
 
 float3 srgb_to_rgb_approx(float3 srgb) {

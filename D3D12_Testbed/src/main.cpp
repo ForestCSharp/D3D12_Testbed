@@ -575,7 +575,7 @@ int main()
 	HR_CHECK(command_list->Close());
 
 	//Load Environment Map
-	Texture hdr_equirectangular_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, "data/hdr/Newport_Loft.hdr");
+	Texture hdr_equirectangular_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, "data/hdr/Frozen_Waterfall.hdr");
 	hdr_equirectangular_texture.set_name("Env Map (equirectangular)");
 
 	const UINT hdr_cube_size = 1024;
@@ -823,7 +823,7 @@ int main()
 		auto specular_cubemap_rt_barrier = CD3DX12_RESOURCE_BARRIER::Transition(specular_cubemap_texture.resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
 		command_list->ResourceBarrier(1, &specular_cubemap_rt_barrier);
 	
-		for (size_t mip_index = 0; mip_index < prefilter_mip_levels; ++mip_index)
+		for (UINT mip_index = 0; mip_index < prefilter_mip_levels; ++mip_index)
 		{
 			command_list->SetPipelineState(specular_prefilter_pipeline_state.Get());
 
@@ -1010,8 +1010,9 @@ int main()
 
 	bool use_reference_lut = false;
 
-	Texture* debug_texture = &specular_lut_texture;
 	bool draw_debug_texture = false;
+	Texture* debug_texture = &specular_lut_texture;
+	int debug_texture_lod = 0;
 	UINT debug_texture_size = 500;
 	
 	bool should_close = false;
@@ -1142,8 +1143,8 @@ int main()
 				ImGui::Indent();
 				ImGui::Checkbox("Draw Debug Texture", &draw_debug_texture);
 
-				const char* debug_view_texture_name = debug_texture ? debug_texture->get_name() : "None Selected";
-				if (ImGui::BeginCombo("Texture to View", debug_view_texture_name))
+				const char* debug_texture_name = debug_texture ? debug_texture->get_name() : "None Selected";
+				if (ImGui::BeginCombo("Texture to View", debug_texture_name))
 				{
 					Texture* debug_view_textures[] = {&specular_lut_texture, &reference_lut};
 					for (uint32_t i = 0; i < _countof(debug_view_textures); ++i)
@@ -1165,11 +1166,23 @@ int main()
 					ImGui::EndCombo();
 				}
 
+				if (debug_texture != nullptr)
+				{
+					auto resource_desc = debug_texture->resource->GetDesc();
+					if (ImGui::SliderInt("LOD", &debug_texture_lod, 0, resource_desc.MipLevels - 1))
+					{
+						debug_texture_lod = max(0, debug_texture_lod);
+					}
+
+					debug_texture_lod = max(0, debug_texture_lod);
+				}
+
 				int tmp = static_cast<int>(debug_texture_size);
 				if (ImGui::SliderInt("Debug Texture Size", &tmp, 1, min(width, height)))
 				{
 					debug_texture_size = static_cast<UINT>(tmp);
 				}
+				
 				ImGui::Unindent();
 			}
 
@@ -1232,6 +1245,7 @@ int main()
 			mesh_constant_buffers.data(frame_resources.frame_index).specular_lut_texture_index = use_reference_lut ? reference_lut.bindless_index : specular_lut_texture.bindless_index;
 
 			texture_viewer_constant_buffers.data(frame_resources.frame_index).texture_index = debug_texture ? debug_texture->bindless_index : INVALID_INDEX;
+			texture_viewer_constant_buffers.data(frame_resources.frame_index).texture_lod = debug_texture ? debug_texture->bindless_index : INVALID_INDEX;
 
 			HR_CHECK(command_allocators[frame_resources.frame_index]->Reset());
 

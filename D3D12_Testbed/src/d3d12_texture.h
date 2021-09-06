@@ -18,13 +18,13 @@ using Microsoft::WRL::ComPtr;
 #include "d3d12_helpers.h"
 
 //TODO: TextureBuilder:
-/* texture_builder
+/* TextureBuilder()
 .width(4)
 .height(4)
 .format(...)
 .array_count(6)
 .allow_render_target(true)
-.build();
+.build(device, gpu_memory_allocator);
 */
 
 constexpr int INVALID_INDEX = -1;
