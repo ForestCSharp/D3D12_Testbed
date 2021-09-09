@@ -898,7 +898,7 @@ int main()
 	specular_prefilter_instance.release();
 
 	uint32_t model_to_render = 0;
-	const char* model_paths[] = {"data/meshes/sphere.glb", "data/meshes/Monkey.glb", "data/meshes/LunaMoth.glb"};
+	const char* model_paths[] = {"data/meshes/sphere.glb", "data/meshes/Monkey.glb", "data/meshes/LunaMoth.glb", "data/meshes/Cerberus.glb"};
 
 	std::vector<std::vector<Mesh>> models;
 
