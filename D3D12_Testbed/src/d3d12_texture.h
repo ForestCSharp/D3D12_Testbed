@@ -27,14 +27,14 @@ using Microsoft::WRL::ComPtr;
 .build(device, gpu_memory_allocator);
 */
 
-constexpr int INVALID_INDEX = -1;
+constexpr int BINDLESS_INVALID_INDEX = -1;
 
 struct Texture
 {
 	ComPtr<ID3D12Resource> resource;
 	D3D12MA::Allocation* allocation = nullptr;
 
-	int bindless_index = INVALID_INDEX;
+	int bindless_index = BINDLESS_INVALID_INDEX;
 	bool is_cubemap = false;
 
 	//TODO: this likely shouldn't be managed by the texture resource
@@ -53,18 +53,93 @@ struct Texture
 		set_name("DefaultTexture");
 	}
 
+	//TODO: Helper to do work after stb image load (copying float data via staging buffer)
+
+	//Loads texture from binary data representing an image file-format
+	Texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue, const DXGI_FORMAT format, const UINT mip_levels, uint8_t* buffer, int len)
+	{
+		int image_width, image_height;
+
+		const int desired_channels = 4; //We want an alpha channel
+		stbi_set_flip_vertically_on_load(false); //TODO: arg for this in TextureBuilder
+		if (float* image_data = stbi_loadf_from_memory(buffer, len, &image_width, &image_height, nullptr, desired_channels))
+		{
+			create_texture(device, gpu_memory_allocator, format, mip_levels, D3D12_RESOURCE_FLAG_NONE, image_width, image_height, 1);
+
+			upload_texture_data(device, gpu_memory_allocator, command_queue, desired_channels, image_data, image_width, image_height);
+
+			stbi_image_free(image_data);
+		}
+	}
+
 	//Loads a single texture from file
 	Texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue, const DXGI_FORMAT format, const UINT mip_levels, const char* file)
 	{
 		int image_width, image_height;
 		const int desired_channels = 4; //We want an alpha channel
 
-		stbi_set_flip_vertically_on_load(true);
+		stbi_set_flip_vertically_on_load(true); //TODO: arg for this in TextureBuilder
 		if (float* image_data = stbi_loadf(file, &image_width, &image_height, nullptr, desired_channels))
 		{
 			create_texture(device, gpu_memory_allocator, format, mip_levels, D3D12_RESOURCE_FLAG_NONE, image_width, image_height, 1);
 
-			const size_t image_pixel_size = desired_channels * sizeof(float);
+			upload_texture_data(device, gpu_memory_allocator, command_queue, desired_channels, image_data, image_width, image_height);
+
+			stbi_image_free(image_data);
+			set_name("FileTexture");
+		}
+		else
+		{
+			printf("Failed to load texture\n");
+		}
+	}
+
+	void create_texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format,  const UINT mip_levels, D3D12_RESOURCE_FLAGS flags, const UINT image_width, const UINT image_height, const UINT image_count)
+	{
+		assert(gpu_memory_allocator);
+		assert(image_count > 0);
+
+		D3D12MA::ALLOCATION_DESC texture_alloc_desc = {};
+		texture_alloc_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+		D3D12_RESOURCE_DESC texture_desc = {};
+		texture_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+		texture_desc.Alignment = 0;
+		texture_desc.Width = image_width;
+		texture_desc.Height = image_height;
+		texture_desc.DepthOrArraySize = image_count;
+		texture_desc.MipLevels = mip_levels;
+		texture_desc.Format = format;
+		texture_desc.SampleDesc.Count = 1;
+		texture_desc.SampleDesc.Quality = 0;
+		texture_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+		texture_desc.Flags = flags;
+
+		D3D12_CLEAR_VALUE clear_value = {};
+		clear_value.Format = format;
+
+		const bool can_have_clear_value = (flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+			|| (flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+
+		HR_CHECK(gpu_memory_allocator->CreateResource(
+			&texture_alloc_desc,
+			&texture_desc,
+			D3D12_RESOURCE_STATE_COMMON,
+			can_have_clear_value ? &clear_value : nullptr,
+			&allocation,
+			IID_PPV_ARGS(&resource)
+		));
+		
+		//Create rtv if we can be a render target
+		if (flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+		{
+			create_rtv(device);
+		}
+	}
+
+	void upload_texture_data(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue, const int desired_channels, float* image_data, const int image_width, const int image_height)
+	{
+		const size_t image_pixel_size = desired_channels * sizeof(float);
 
 			ComPtr<ID3D12Resource> staging_buffer;
 			D3D12MA::Allocation* staging_buffer_allocation = nullptr;
@@ -121,57 +196,6 @@ struct Texture
 			wait_gpu_idle(device, command_queue);
 
 			staging_buffer_allocation->Release();
-
-			stbi_image_free(image_data);
-			set_name("FileTexture");
-		}
-		else
-		{
-			printf("Failed to load texture\n");
-		}
-	}
-
-	void create_texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format,  const UINT mip_levels, D3D12_RESOURCE_FLAGS flags, const UINT image_width, const UINT image_height, const UINT image_count)
-	{
-		assert(gpu_memory_allocator);
-		assert(image_count > 0);
-
-		D3D12MA::ALLOCATION_DESC texture_alloc_desc = {};
-		texture_alloc_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
-
-		D3D12_RESOURCE_DESC texture_desc = {};
-		texture_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-		texture_desc.Alignment = 0;
-		texture_desc.Width = image_width;
-		texture_desc.Height = image_height;
-		texture_desc.DepthOrArraySize = image_count;
-		texture_desc.MipLevels = mip_levels;
-		texture_desc.Format = format;
-		texture_desc.SampleDesc.Count = 1;
-		texture_desc.SampleDesc.Quality = 0;
-		texture_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-		texture_desc.Flags = flags;
-
-		D3D12_CLEAR_VALUE clear_value = {};
-		clear_value.Format = format;
-
-		const bool can_have_clear_value = (flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
-			|| (flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
-
-		HR_CHECK(gpu_memory_allocator->CreateResource(
-			&texture_alloc_desc,
-			&texture_desc,
-			D3D12_RESOURCE_STATE_COMMON,
-			can_have_clear_value ? &clear_value : nullptr,
-			&allocation,
-			IID_PPV_ARGS(&resource)
-		));
-		
-		//Create rtv if we can be a render target
-		if (flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
-		{
-			create_rtv(device);
-		}
 	}
 
 	//FCS TODO: Remove this, add "register cubemap texture" to bindless_resource_manager
@@ -403,13 +427,13 @@ struct BindlessResourceManager
 	{
 		const bool is_cubemap = in_texture_resource.is_cubemap;
 
-		if (in_texture_resource.bindless_index != INVALID_INDEX)
+		if (in_texture_resource.bindless_index != BINDLESS_INVALID_INDEX)
 		{
 			printf("Error: Texture is already bound\n");
 			return;
 		}
 
-		size_t index = INVALID_INDEX;
+		size_t index = BINDLESS_INVALID_INDEX;
 		std::vector<size_t>& free_list_ref = is_cubemap ? cubemap_free_indices : texture_free_indices;
 		size_t& current_size_ref = is_cubemap ? cubemap_current_size : texture_current_size;
 
@@ -430,7 +454,7 @@ struct BindlessResourceManager
 			//Ran out of slots
 		}
 
-		if (index != INVALID_INDEX)
+		if (index != BINDLESS_INVALID_INDEX)
 		{
 			create_srv_at_index(in_texture_resource, index);
 		}
@@ -439,7 +463,7 @@ struct BindlessResourceManager
 	void unregister_texture(Texture& in_texture_resource)
 	{
 
-		if (in_texture_resource.bindless_index != INVALID_INDEX)
+		if (in_texture_resource.bindless_index != BINDLESS_INVALID_INDEX)
 		{
 			const size_t index = in_texture_resource.bindless_index;
 
@@ -461,7 +485,7 @@ struct BindlessResourceManager
 				printf("Freed in middle\n");
 			}
 
-			in_texture_resource.bindless_index = INVALID_INDEX;
+			in_texture_resource.bindless_index = BINDLESS_INVALID_INDEX;
 
 			Texture& invalid_resource = is_cubemap ? invalid_cubemap : invalid_texture;
 			create_srv_at_index(invalid_resource, index);

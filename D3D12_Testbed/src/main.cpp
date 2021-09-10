@@ -14,6 +14,8 @@ using Microsoft::WRL::ComPtr;
 using namespace DirectX;
 
 //Std Lib
+#include <optional>
+using std::optional;
 #include <vector>
 #include <array>
 using std::array;
@@ -49,28 +51,31 @@ struct SceneConstantBuffer
 
 struct InstanceConstantBuffer
 {
-	UINT texture_index = 0;
+	INT texture_index = 0;
 	UINT texture_lod = 0;
 };
 
 struct SpecularPrefilterConstantBuffer
 {
-	UINT texture_index;
+	INT texture_index;
 	float roughness;
 };
 
 struct MeshRenderConstantBuffer
 {
-	UINT diffuse_ibl_texture_index;
-	UINT specular_ibl_texture_index;
+	INT diffuse_ibl_texture_index;
+	INT specular_ibl_texture_index;
 	UINT specular_ibl_mip_count;
-	UINT specular_lut_texture_index;
+	INT specular_lut_texture_index;
+	INT base_color_texture_index = BINDLESS_INVALID_INDEX;
+	INT metallic_roughness_texture_index = BINDLESS_INVALID_INDEX;
 };
 
 struct TextureViewerData
 {
-	UINT texture_index = 0;
+	INT texture_index = 0;
 	UINT texture_lod = 0;
+	//TODO: channel mask (RGBA)
 };
 
 //TODO: Move to helpers file
@@ -247,7 +252,7 @@ int main()
 		}
 	}
 
-	// 2. Create a D3D12 Factory, Adapter, and Device
+	// Create a D3D12 Factory, Adapter, and Device
 	UINT dxgi_factory_flags	 = DXGI_CREATE_FACTORY_DEBUG;
 	ComPtr<IDXGIFactory4> factory;
 	HR_CHECK(CreateDXGIFactory2(dxgi_factory_flags, IID_PPV_ARGS(&factory)));
@@ -263,6 +268,8 @@ int main()
 		{
 			continue;
 		}
+
+		// printf("Adapter: %ls Dedicated VRAM: %llu", desc.Description, desc.DedicatedVideoMemory);
 
 		// Check to see if the adapter supports Direct3D 12, and create device if so
 		if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, _uuidof(ID3D12Device), nullptr)))
@@ -575,7 +582,7 @@ int main()
 	HR_CHECK(command_list->Close());
 
 	//Load Environment Map
-	Texture hdr_equirectangular_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, "data/hdr/Frozen_Waterfall.hdr");
+	Texture hdr_equirectangular_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, "data/hdr/Newport_Loft.hdr");
 	hdr_equirectangular_texture.set_name("Env Map (equirectangular)");
 
 	const UINT hdr_cube_size = 1024;
@@ -900,41 +907,56 @@ int main()
 	uint32_t model_to_render = 0;
 	const char* model_paths[] = {"data/meshes/sphere.glb", "data/meshes/Monkey.glb", "data/meshes/LunaMoth.glb", "data/meshes/Cerberus.glb"};
 
-	std::vector<std::vector<Mesh>> models;
+	//TODO: use this in inner std::vector below
+	struct Primitive
+	{
+		Mesh mesh;
+		optional<Texture> base_color_texture;
+		optional<Texture> metallic_roughness_texture;
+
+		Primitive(const Mesh& in_mesh, const optional<Texture>& in_base_color_texture, const optional<Texture>& in_metallic_roughness_texture)
+		: mesh(in_mesh)
+		, base_color_texture(in_base_color_texture)
+		, metallic_roughness_texture(in_metallic_roughness_texture)
+		{}
+	};
+
+	std::vector<std::vector<Primitive>> models;
 
 	for (uint32_t i = 0; i < _countof(model_paths); ++i)
 	{
 		GltfAsset gltf_asset;
 		if (!gltf_load_asset(model_paths[i], &gltf_asset))
 		{
-			printf("FAILED TO LOAD GLTF ASSET\n");
-			exit(1);
+			printf("FAILED TO LOAD GLTF ASSET: %s\n", model_paths[i]);
+			continue;
 		}
+		
 		assert(gltf_asset.num_meshes > 0);
 		
-		std::vector<Mesh> meshes;
+		std::vector<Primitive> primitives;
 		GltfMesh* gltf_mesh = &gltf_asset.meshes[0];
 		for (uint32_t prim_idx = 0; prim_idx < gltf_mesh->num_primitives; ++prim_idx)
 		{
 			std::vector<GpuVertex> vertices;
 			std::vector<UINT32> indices;
 		
-			GltfPrimitive* primitive = &gltf_mesh->primitives[prim_idx];
+			GltfPrimitive* gltf_primitive = &gltf_mesh->primitives[prim_idx];
 	
 			//Vertices
-			uint8_t* positions_buffer = primitive->positions->buffer_view->buffer->data;
-			positions_buffer += gltf_accessor_get_initial_offset(primitive->positions);
-			uint32_t positions_byte_stride = gltf_accessor_get_stride(primitive->positions);
+			uint8_t* positions_buffer = gltf_primitive->positions->buffer_view->buffer->data;
+			positions_buffer += gltf_accessor_get_initial_offset(gltf_primitive->positions);
+			uint32_t positions_byte_stride = gltf_accessor_get_stride(gltf_primitive->positions);
 	
-			uint8_t* normals_buffer = primitive->normals->buffer_view->buffer->data;
-			normals_buffer += gltf_accessor_get_initial_offset(primitive->normals);
-			uint32_t normals_byte_stride = gltf_accessor_get_stride(primitive->normals);
+			uint8_t* normals_buffer = gltf_primitive->normals->buffer_view->buffer->data;
+			normals_buffer += gltf_accessor_get_initial_offset(gltf_primitive->normals);
+			uint32_t normals_byte_stride = gltf_accessor_get_stride(gltf_primitive->normals);
 	
-			uint8_t* uvs_buffer = primitive->texcoord0->buffer_view->buffer->data;
-			uvs_buffer += gltf_accessor_get_initial_offset(primitive->texcoord0);
-			uint32_t uvs_byte_stride = gltf_accessor_get_stride(primitive->texcoord0);
+			uint8_t* uvs_buffer = gltf_primitive->texcoord0->buffer_view->buffer->data;
+			uvs_buffer += gltf_accessor_get_initial_offset(gltf_primitive->texcoord0);
+			uint32_t uvs_byte_stride = gltf_accessor_get_stride(gltf_primitive->texcoord0);
 	
-			uint32_t vertices_count = primitive->positions->count;
+			uint32_t vertices_count = gltf_primitive->positions->count;
 			vertices.reserve(vertices_count);
 	
 			for (uint32_t vert_idx = 0; vert_idx < vertices_count; ++vert_idx) 
@@ -953,25 +975,62 @@ int main()
 			}
 	
 			//Indices
-			uint8_t* indices_buffer = primitive->indices->buffer_view->buffer->data;
-			indices_buffer += gltf_accessor_get_initial_offset(primitive->indices);
-			uint32_t indices_byte_stride = gltf_accessor_get_stride(primitive->indices);
+			uint8_t* indices_buffer = gltf_primitive->indices->buffer_view->buffer->data;
+			indices_buffer += gltf_accessor_get_initial_offset(gltf_primitive->indices);
+			uint32_t indices_byte_stride = gltf_accessor_get_stride(gltf_primitive->indices);
 	
-			uint32_t indices_count = primitive->indices->count;
+			uint32_t indices_count = gltf_primitive->indices->count;
 			indices.reserve(indices_count);
 	
 			for (uint32_t indices_idx = 0; indices_idx < indices_count; ++indices_idx) 
 			{
-				UINT32 index = 0; //Need to init for memcpy
+				UINT32 index = 0;
 				memcpy(&index, indices_buffer, indices_byte_stride);
 				indices_buffer += indices_byte_stride;
 				indices.push_back(index);
 			}
 
-			meshes.emplace_back(Mesh(gpu_memory_allocator, vertices, indices));
+			optional<Texture> base_color_texture;
+			optional<Texture> metallic_roughness_texture;
+
+			if (gltf_primitive->material)
+			{
+				GltfPbrMetallicRoughness* gltf_pbr = &gltf_primitive->material->pbr_metallic_roughness;
+				if (GltfTexture* gltf_base_color_texture = gltf_pbr->base_color_texture)
+				{
+					GltfBufferView* gltf_buffer_view = gltf_base_color_texture->image->buffer_view;
+					GltfBuffer* gltf_buffer = gltf_buffer_view->buffer;
+
+					uint8_t* buffer_ptr = gltf_buffer->data + gltf_buffer_view->byte_offset;
+					size_t byte_length = gltf_buffer_view->byte_length;
+
+					base_color_texture = Texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, buffer_ptr, byte_length);
+					std::string base_color_string = std::string(gltf_mesh->name) + "_BaseColorTexture";
+					base_color_texture->set_name(base_color_string.c_str());
+					bindless_resource_manager.register_texture(*base_color_texture);
+				}
+
+				if (GltfTexture* gltf_metallic_roughness_texture = gltf_pbr->metallic_roughness_texture)
+				{
+					GltfBufferView* gltf_buffer_view = gltf_metallic_roughness_texture->image->buffer_view;
+					GltfBuffer* gltf_buffer = gltf_buffer_view->buffer;
+
+					uint8_t* buffer_ptr = gltf_buffer->data + gltf_buffer_view->byte_offset;
+					size_t byte_length = gltf_buffer_view->byte_length;
+
+					metallic_roughness_texture = Texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, buffer_ptr, byte_length);
+					std::string base_color_string = std::string(gltf_mesh->name) + "_MetallicRoughnessTexture";
+					metallic_roughness_texture->set_name(base_color_string.c_str());
+					bindless_resource_manager.register_texture(*metallic_roughness_texture);
+				}
+			}
+
+			primitives.emplace_back(Primitive(Mesh(gpu_memory_allocator, vertices, indices), base_color_texture, metallic_roughness_texture));
 		}
 
-		models.push_back(meshes);
+		models.push_back(primitives);
+
+		gltf_free_asset(&gltf_asset);
 	}
 
 	TConstantBufferArray<SceneConstantBuffer, backbuffer_count> scene_constant_buffers(gpu_memory_allocator);
@@ -1013,7 +1072,7 @@ int main()
 	bool draw_debug_texture = false;
 	Texture* debug_texture = &specular_lut_texture;
 	int debug_texture_lod = 0;
-	UINT debug_texture_size = 500;
+	UINT debug_texture_size = 720;
 	
 	bool should_close = false;
 	bool vsync_enabled = true;
@@ -1084,8 +1143,8 @@ int main()
 					Texture* cubemap_textures[] = {&hdr_cubemap_texture, &ibl_cubemap_texture, &specular_cubemap_texture};
 					for (uint32_t i = 0; i < _countof(cubemap_textures); ++i)
 					{
-						const int current_index = current_skybox_texture ? current_skybox_texture->bindless_index : INVALID_INDEX;
-						const bool is_selected = current_index != INVALID_INDEX && cubemap_textures[i]->bindless_index == current_index;
+						const int current_index = current_skybox_texture ? current_skybox_texture->bindless_index : BINDLESS_INVALID_INDEX;
+						const bool is_selected = current_index != BINDLESS_INVALID_INDEX && cubemap_textures[i]->bindless_index == current_index;
 				
 						if (ImGui::Selectable(cubemap_textures[i]->get_name(), is_selected))
 						{
@@ -1146,15 +1205,32 @@ int main()
 				const char* debug_texture_name = debug_texture ? debug_texture->get_name() : "None Selected";
 				if (ImGui::BeginCombo("Texture to View", debug_texture_name))
 				{
-					Texture* debug_view_textures[] = {&specular_lut_texture, &reference_lut};
-					for (uint32_t i = 0; i < _countof(debug_view_textures); ++i)
+					std::vector<Texture*> debug_view_textures = {&specular_lut_texture, &reference_lut};
+
+					for (auto& primitives : models)
 					{
-						const int current_index = debug_texture ? debug_texture->bindless_index : INVALID_INDEX;
-						const bool is_selected = current_index != INVALID_INDEX && debug_view_textures[i]->bindless_index == current_index;
-				
-						if (ImGui::Selectable(debug_view_textures[i]->get_name(), is_selected))
+						for (auto& primitive : primitives)
 						{
-							debug_texture = debug_view_textures[i];
+							if (primitive.base_color_texture && primitive.base_color_texture->bindless_index != BINDLESS_INVALID_INDEX)
+							{
+								debug_view_textures.push_back(&(*primitive.base_color_texture));
+							}
+
+							if (primitive.metallic_roughness_texture && primitive.metallic_roughness_texture->bindless_index != BINDLESS_INVALID_INDEX)
+							{
+								debug_view_textures.push_back(&(*primitive.metallic_roughness_texture));
+							}
+						}
+					}
+					
+					for (Texture* debug_view_texture : debug_view_textures)
+					{
+						const int current_index = debug_texture ? debug_texture->bindless_index : BINDLESS_INVALID_INDEX;
+						const bool is_selected = current_index != BINDLESS_INVALID_INDEX && debug_view_texture->bindless_index == current_index;
+				
+						if (ImGui::Selectable(debug_view_texture->get_name(), is_selected))
+						{
+							debug_texture = debug_view_texture;
 						}
 
 						if (is_selected)
@@ -1244,8 +1320,13 @@ int main()
 
 			mesh_constant_buffers.data(frame_resources.frame_index).specular_lut_texture_index = use_reference_lut ? reference_lut.bindless_index : specular_lut_texture.bindless_index;
 
-			texture_viewer_constant_buffers.data(frame_resources.frame_index).texture_index = debug_texture ? debug_texture->bindless_index : INVALID_INDEX;
-			texture_viewer_constant_buffers.data(frame_resources.frame_index).texture_lod = debug_texture ? debug_texture->bindless_index : INVALID_INDEX;
+			//TODO: per-frame cbuffer per model
+			mesh_constant_buffers.data(frame_resources.frame_index).base_color_texture_index = models[3][0].base_color_texture->bindless_index;
+			mesh_constant_buffers.data(frame_resources.frame_index).metallic_roughness_texture_index = models[3][0].metallic_roughness_texture->bindless_index;
+			
+
+			texture_viewer_constant_buffers.data(frame_resources.frame_index).texture_index = debug_texture ? debug_texture->bindless_index : BINDLESS_INVALID_INDEX;
+			texture_viewer_constant_buffers.data(frame_resources.frame_index).texture_lod = debug_texture ? debug_texture->bindless_index : BINDLESS_INVALID_INDEX;
 
 			HR_CHECK(command_allocators[frame_resources.frame_index]->Reset());
 
@@ -1295,8 +1376,10 @@ int main()
 			command_list->ClearRenderTargetView(rtv_handle, clear_color, 0, nullptr);
 			command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 			
-			for (Mesh& mesh : models[static_cast<size_t>(model_to_render)])
+			for (Primitive& primitive : models[static_cast<size_t>(model_to_render)])
 			{
+				Mesh& mesh = primitive.mesh;
+				//TODO: set material CBV
 				command_list->IASetVertexBuffers(0, 1, &mesh.vertex_buffer_view);
 				command_list->IASetIndexBuffer(&mesh.index_buffer_view);
 				command_list->DrawIndexedInstanced(mesh.index_count(), mesh_instance_count, 0, 0, 0);
@@ -1380,11 +1463,21 @@ int main()
 		specular_lut_texture.release();
 		reference_lut.release();
 
-		for (auto& meshes : models)
+		for (auto& primitives : models)
 		{
-			for (Mesh& mesh : meshes)
+			for (Primitive& primitive : primitives)
 			{
-				mesh.release();
+				primitive.mesh.release();
+				
+				if (primitive.base_color_texture)
+				{
+					primitive.base_color_texture->release();
+				}
+
+				if (primitive.metallic_roughness_texture)
+				{
+					primitive.metallic_roughness_texture->release();
+				}
 			}
 		}
 

@@ -5,10 +5,12 @@
 
 cbuffer InstanceConstantBuffer : register(b1)
 {
-    uint diffuse_ibl_texture_index;
-    uint specular_ibl_texture_index;
+    int diffuse_ibl_texture_index;
+    int specular_ibl_texture_index;
     uint specular_ibl_mip_count;
-    uint specular_lut_texture_index;
+    int specular_lut_texture_index;
+    int base_color_texture_index;
+    int metallic_roughness_texture_index;
 };
 
 #include "bindless.hlsl"
@@ -31,6 +33,7 @@ struct PsInput
     float3 world_pos : POSITION;
     float3 normal : NORMAL;
     float4 color : COLOR;
+    float2 uv : TEXCOORD;
     uint instance_id : SV_InstanceID;
 };
 
@@ -55,6 +58,7 @@ PsInput vs_main(const float3 position : POSITION, const float3 normal : NORMAL, 
     result.world_pos = world_pos;
     result.normal = normal;
     result.color = color;
+    result.uv = uv;
     result.instance_id = instance_id;
 
     return result;
@@ -74,10 +78,16 @@ float4 ps_main(const PsInput input) : SV_TARGET
     const float3 view_dir = normalize(cam_pos - input.world_pos).xyz;
     const float3 normal = normalize(input.normal).xyz;
 
-    //TODO: per-instance args
-    const float3 albedo = input.color.rgb;
-    const float roughness = 1.0 - (float)(input.instance_id / 10) / 10.0;
-    const float metallic  = 1.0 - fmod(input.instance_id, 10) / 10.0;
+    const float3 albedo = base_color_texture_index != BINDLESS_INVALID_INDEX ? Texture2DTable[base_color_texture_index].Sample(texture_sampler, input.uv).rgb : input.color.rgb;
+
+    float roughness = 1.0 - (float)(input.instance_id / 10) / 10.0;
+    float metallic  = 1.0 - fmod(input.instance_id, 10) / 10.0;
+    if (metallic_roughness_texture_index != BINDLESS_INVALID_INDEX)
+    {
+        float2 metallic_roughness = Texture2DTable[metallic_roughness_texture_index].Sample(texture_sampler, input.uv).rg;
+        metallic = metallic_roughness.r;
+        roughness = metallic_roughness.g;
+    }
     
     const float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
 

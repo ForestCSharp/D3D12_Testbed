@@ -510,24 +510,6 @@ uint32_t gltf_accessor_get_stride(GltfAccessor* accessor) {
         * gltf_component_type_size(accessor->component_type);
 }
 
-typedef struct GltfPrimitive {
-    GltfAccessor* positions;
-    GltfAccessor* normals;
-    //TODO: TangentAccessor
-    GltfAccessor* texcoord0;
-    //TODO: TexCoords Accessors (0,1)
-    //TODO: Color Accessor
-    //TODO: Joints, Weights Acessors
-    GltfAccessor* indices;
-    uint32_t material;
-} GltfPrimitive;
-
-typedef struct GltfMesh {
-    const char* name;
-    uint32_t num_primitives;
-    GltfPrimitive* primitives;
-} GltfMesh;
-
 typedef struct GltfImage {
     GltfBufferView* buffer_view;
     //TODO: MIME Type
@@ -561,6 +543,24 @@ typedef struct GltfMaterial {
     //TODO: occlusion texture
 } GltfMaterial;
 
+typedef struct GltfPrimitive {
+    GltfAccessor* positions;
+    GltfAccessor* normals;
+    //TODO: TangentAccessor
+    GltfAccessor* texcoord0;
+    //TODO: TexCoords Accessors (0,1)
+    //TODO: Color Accessor
+    //TODO: Joints, Weights Accessors
+    GltfAccessor* indices;
+    GltfMaterial* material;
+} GltfPrimitive;
+
+typedef struct GltfMesh {
+    char* name;
+    uint32_t num_primitives;
+    GltfPrimitive* primitives;
+} GltfMesh;
+
 typedef struct GltfAsset {
     JsonObject      json;
     uint32_t        num_buffers;
@@ -569,14 +569,14 @@ typedef struct GltfAsset {
     GltfBufferView* buffer_views;
     uint32_t        num_accessors;
     GltfAccessor*   accessors;
-    uint32_t        num_meshes;
-    GltfMesh*       meshes;
     uint32_t        num_images;
     GltfImage*      images;
     uint32_t        num_textures;
     GltfTexture*    textures;
     uint32_t        num_materials;
     GltfMaterial*   materials;
+    uint32_t        num_meshes;
+    GltfMesh*       meshes;
 } GltfAsset;
 
 FILE* open_binary_file(const char* filename)
@@ -726,71 +726,11 @@ bool gltf_load_asset(const char* filename, GltfAsset* out_asset) {
             }
         }
 
-        //MESHES
-        {
-            const JsonArray* json_meshes = json_object_get_array(&out_asset->json, "meshes");
-            if (!json_meshes) {
-                return false;
-            }
-
-            out_asset->num_meshes = json_meshes->count;
-            out_asset->meshes = (GltfMesh*) calloc(sizeof(GltfMesh), out_asset->num_meshes);
-
-            for (uint32_t i = 0; i < out_asset->num_meshes; ++i) {
-                GltfMesh* mesh = &out_asset->meshes[i];
-                const JsonObject* json_mesh = json_array_get_object(json_meshes, i);
-                const JsonArray* json_primitives = json_object_get_array(json_mesh, "primitives");
-            
-                if (!json_primitives) {
-                    return false;
-                }
-
-                mesh->num_primitives = json_primitives->count;
-                mesh->primitives = (GltfPrimitive*) calloc(sizeof(GltfPrimitive), mesh->num_primitives);
-
-                for (uint32_t j = 0; j < mesh->num_primitives; ++j) {
-                    GltfPrimitive* primitive = &mesh->primitives[j];
-                    const JsonObject* json_primitive = json_array_get_object(json_primitives, j);
-                    const JsonObject* json_attributes = json_object_get_object(json_primitive, "attributes");
-
-                    //TODO: Primitive Topology (Triangle (4) is default, but check for others)
-
-                    uint32_t positions_index = 0;
-                    if (json_value_as_uint32(json_object_get_value(json_attributes, "POSITION"), &positions_index) && positions_index < out_asset->num_accessors) {
-                        primitive->positions = &out_asset->accessors[positions_index];
-                    }
- 
-                    uint32_t normals_index = 0;
-                    if (json_value_as_uint32(json_object_get_value(json_attributes, "NORMAL"), &normals_index) && normals_index < out_asset->num_accessors) {
-                        primitive->normals = &out_asset->accessors[normals_index];
-                    }
-
-                    uint32_t texcoord0_index = 0;
-                    if (json_value_as_uint32(json_object_get_value(json_attributes, "TEXCOORD_0"), &texcoord0_index) && texcoord0_index < out_asset->num_accessors) {
-                        primitive->texcoord0 = &out_asset->accessors[texcoord0_index];
-                    }
-
-                    uint32_t indices_index = 0;
-                    if (json_value_as_uint32(json_object_get_value(json_primitive, "indices"), &indices_index) && indices_index < out_asset->num_accessors) {
-                        primitive->indices = &out_asset->accessors[indices_index];
-                    }
-
-                    uint32_t material_index = 0;
-                    if (json_value_as_uint32(json_object_get_value(json_primitive, "material_index"), &material_index)) {
-                        primitive->material = material_index;
-                    }
-                }
-            }
-        }
-
-        //TODO: NODES
-
-        //TODO: SCENES
-
-        //TODO: Skinning
-
         //IMAGES
         {
+            out_asset->num_images = 0;
+            out_asset->images = NULL;
+            
             const JsonArray* json_images = json_object_get_array(&out_asset->json, "images");
             if (json_images) {
                 out_asset->num_images = json_images->count;
@@ -813,6 +753,9 @@ bool gltf_load_asset(const char* filename, GltfAsset* out_asset) {
 
         //TEXTURES
         {
+            out_asset->num_textures = 0;
+            out_asset->textures = NULL;
+            
             const JsonArray* json_textures = json_object_get_array(&out_asset->json, "textures");
             if (json_textures) {
                 out_asset->num_textures = json_textures->count;
@@ -831,6 +774,9 @@ bool gltf_load_asset(const char* filename, GltfAsset* out_asset) {
         
         //MATERIALS
         {
+            out_asset->num_materials = 0;
+            out_asset->materials = NULL;
+            
             const JsonArray* json_materials = json_object_get_array(&out_asset->json, "materials");
             if (json_materials) {
                 out_asset->num_materials = json_materials->count;
@@ -885,6 +831,87 @@ bool gltf_load_asset(const char* filename, GltfAsset* out_asset) {
             }
         }
 
+        //MESHES
+        {
+            const JsonArray* json_meshes = json_object_get_array(&out_asset->json, "meshes");
+            if (!json_meshes)
+            {
+                return false;
+            }
+
+            out_asset->num_meshes = json_meshes->count;
+            out_asset->meshes = (GltfMesh*) calloc(sizeof(GltfMesh), out_asset->num_meshes);
+
+            for (uint32_t i = 0; i < out_asset->num_meshes; ++i) {
+                GltfMesh* mesh = &out_asset->meshes[i];
+                const JsonObject* json_mesh = json_array_get_object(json_meshes, i);
+
+                const char* json_mesh_name;
+                if (json_value_as_string(json_object_get_value(json_mesh, "name"), &json_mesh_name))
+                {
+                    const size_t name_len = strlen(json_mesh_name);
+                    mesh->name = (char*) calloc(name_len + 1, sizeof(char));
+                    for (size_t char_idx = 0; char_idx < name_len; ++char_idx)
+                    {
+                        mesh->name[char_idx] = json_mesh_name[char_idx];
+                    }
+                    mesh->name[name_len] = '\0';
+                }
+                else
+                {
+                    mesh->name = NULL;
+                }
+                
+                const JsonArray* json_primitives = json_object_get_array(json_mesh, "primitives");
+            
+                if (!json_primitives) {
+                    return false;
+                }
+
+                mesh->num_primitives = json_primitives->count;
+                mesh->primitives = (GltfPrimitive*) calloc(sizeof(GltfPrimitive), mesh->num_primitives);
+
+                for (uint32_t j = 0; j < mesh->num_primitives; ++j) {
+                    GltfPrimitive* primitive = &mesh->primitives[j];
+                    const JsonObject* json_primitive = json_array_get_object(json_primitives, j);
+                    const JsonObject* json_attributes = json_object_get_object(json_primitive, "attributes");
+
+                    //TODO: Primitive Topology (Triangle (4) is default, but check for others)
+
+                    uint32_t positions_index = 0;
+                    if (json_value_as_uint32(json_object_get_value(json_attributes, "POSITION"), &positions_index) && positions_index < out_asset->num_accessors) {
+                        primitive->positions = &out_asset->accessors[positions_index];
+                    }
+ 
+                    uint32_t normals_index = 0;
+                    if (json_value_as_uint32(json_object_get_value(json_attributes, "NORMAL"), &normals_index) && normals_index < out_asset->num_accessors) {
+                        primitive->normals = &out_asset->accessors[normals_index];
+                    }
+
+                    uint32_t texcoord0_index = 0;
+                    if (json_value_as_uint32(json_object_get_value(json_attributes, "TEXCOORD_0"), &texcoord0_index) && texcoord0_index < out_asset->num_accessors) {
+                        primitive->texcoord0 = &out_asset->accessors[texcoord0_index];
+                    }
+
+                    uint32_t indices_index = 0;
+                    if (json_value_as_uint32(json_object_get_value(json_primitive, "indices"), &indices_index) && indices_index < out_asset->num_accessors) {
+                        primitive->indices = &out_asset->accessors[indices_index];
+                    }
+
+                    uint32_t material_index = 0;
+                    if (json_value_as_uint32(json_object_get_value(json_primitive, "material"), &material_index)) {
+                        primitive->material = &out_asset->materials[material_index];
+                    }
+                }
+            }
+        }
+
+        //TODO: NODES
+
+        //TODO: SCENES
+
+        //TODO: Skinning
+
         fclose(file);
         return true;
     }
@@ -893,12 +920,16 @@ bool gltf_load_asset(const char* filename, GltfAsset* out_asset) {
 }
 
 //FIXME: better checks above
-//FIXME: Outline guarantees (i.e. For a successfully loaded asset, an accessors buffer view is non-null, a buffer_views bufer is non-null, etc.)
+//FIXME: Outline guarantees (i.e. For a successfully loaded asset, an accessors buffer view is non-null, a buffer_views buffer is non-null, etc.)
 
 void gltf_free_asset(GltfAsset* asset) {
 
     for (uint32_t i = 0; i < asset->num_meshes; ++i) {
         free(asset->meshes[i].primitives);
+        if (asset->meshes[i].name)
+        {
+            free(asset->meshes[i].name);
+        }
     }
     free(asset->meshes);
 
@@ -911,6 +942,7 @@ void gltf_free_asset(GltfAsset* asset) {
     free(asset->buffers);
     free(asset->images);
     free(asset->textures);
+    free(asset->materials);
 
     free_json_object(&asset->json);
 }
