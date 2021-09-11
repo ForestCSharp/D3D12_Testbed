@@ -154,7 +154,7 @@ bool parse_json_value(char** json_string, JsonValue* out_value) {
         out_value->data.array.values = NULL;
         consume('[', &current_position);
 
-        //TODO: check for closing brace here to support empty arrays?
+        //TODO: check for closing brace here to support empty arrays
 
         do {
             out_value->data.array.count += 1;
@@ -654,7 +654,7 @@ bool gltf_load_asset(const char* filename, GltfAsset* out_asset) {
             printf("json data: %s\n", json_string);
             char* modified_json_string = json_string;
             const bool succeeded = parse_json_object(&modified_json_string, &out_asset->json);
-            //TODO: Make sure to clean up invalid json if we fail to parse it (inside parse_json_object)
+            //TODO: Make sure to clean up invalid json if we fail to parse it
         }
 
         print_json_object(&out_asset->json, 0, stdout);

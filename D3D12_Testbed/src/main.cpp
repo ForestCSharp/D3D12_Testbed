@@ -1284,7 +1284,7 @@ int main()
 				if (is_key_down('Q')) { cam_pos -= cam_up	   * translation_speed; }
 
 				//Cam Rotation Control
-				if (is_key_down(VK_RBUTTON))
+				if (is_key_down(VK_LBUTTON))
 				{
 					const float rot_rate = 4.0f;
 
@@ -1319,11 +1319,10 @@ int main()
 
 			mesh_constant_buffers.data(frame_resources.frame_index).specular_lut_texture_index = use_reference_lut ? reference_lut.bindless_index : specular_lut_texture.bindless_index;
 
-			//TODO: per-frame cbuffer per model
+			//TODO: per-frame cbuffer per primitive
 			mesh_constant_buffers.data(frame_resources.frame_index).base_color_texture_index = models[0][0].base_color_texture->bindless_index;
 			mesh_constant_buffers.data(frame_resources.frame_index).metallic_roughness_texture_index = models[0][0].metallic_roughness_texture->bindless_index;
 			
-
 			texture_viewer_constant_buffers.data(frame_resources.frame_index).texture_index = debug_texture ? debug_texture->bindless_index : BINDLESS_INVALID_INDEX;
 			texture_viewer_constant_buffers.data(frame_resources.frame_index).texture_lod = debug_texture ? debug_texture->bindless_index : BINDLESS_INVALID_INDEX;
 
