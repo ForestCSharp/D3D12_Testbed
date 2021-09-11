@@ -905,9 +905,8 @@ int main()
 	specular_prefilter_instance.release();
 
 	uint32_t model_to_render = 0;
-	const char* model_paths[] = {"data/meshes/sphere.glb", "data/meshes/Monkey.glb", "data/meshes/LunaMoth.glb", "data/meshes/Cerberus.glb"};
+	const char* model_paths[] = {"data/meshes/DamagedHelmet.glb", "data/meshes/sphere.glb", "data/meshes/Monkey.glb", "data/meshes/LunaMoth.glb", "data/meshes/Cerberus.glb"};
 
-	//TODO: use this in inner std::vector below
 	struct Primitive
 	{
 		Mesh mesh;
@@ -1321,8 +1320,8 @@ int main()
 			mesh_constant_buffers.data(frame_resources.frame_index).specular_lut_texture_index = use_reference_lut ? reference_lut.bindless_index : specular_lut_texture.bindless_index;
 
 			//TODO: per-frame cbuffer per model
-			mesh_constant_buffers.data(frame_resources.frame_index).base_color_texture_index = models[3][0].base_color_texture->bindless_index;
-			mesh_constant_buffers.data(frame_resources.frame_index).metallic_roughness_texture_index = models[3][0].metallic_roughness_texture->bindless_index;
+			mesh_constant_buffers.data(frame_resources.frame_index).base_color_texture_index = models[0][0].base_color_texture->bindless_index;
+			mesh_constant_buffers.data(frame_resources.frame_index).metallic_roughness_texture_index = models[0][0].metallic_roughness_texture->bindless_index;
 			
 
 			texture_viewer_constant_buffers.data(frame_resources.frame_index).texture_index = debug_texture ? debug_texture->bindless_index : BINDLESS_INVALID_INDEX;

@@ -153,12 +153,18 @@ bool parse_json_value(char** json_string, JsonValue* out_value) {
         out_value->data.array.count = 0;
         out_value->data.array.values = NULL;
         consume('[', &current_position);
+
+        //TODO: check for closing brace here to support empty arrays?
+
         do {
             out_value->data.array.count += 1;
             out_value->data.array.values = (JsonValue*) realloc(out_value->data.array.values, sizeof(JsonValue) * out_value->data.array.count);
             JsonValue* array_value = &out_value->data.array.values[out_value->data.array.count - 1];
             memset(array_value, 0, sizeof(JsonValue));
-            if (!parse_json_value(&current_position, array_value)) { return false; }
+            if (!parse_json_value(&current_position, array_value))
+            {
+                return false;
+            }
 
         } while(consume(',', &current_position));
         consume(']', &current_position);
@@ -181,10 +187,20 @@ bool parse_json_value(char** json_string, JsonValue* out_value) {
 //Modifies json_string (necessary for recursion)
 bool parse_json_object(char** json_string, JsonObject* out_json_object) {
     char* current_position = *json_string;
-    //1. Consume leading whitespace and '{'
-    if (!consume('{', &current_position)) { return false; }
+    //Consume leading whitespace and '{'
+    if (!consume('{', &current_position))
+    {
+        return false;
+    }
 
-    //2. Iterate over key/value pairs
+    //Check for empty object
+    if (consume('}', &current_position))
+    {
+        *json_string = current_position;
+        return true;
+    }
+
+    //Iterate over key/value pairs
     out_json_object->count = 0;
     out_json_object->key_value_pairs = NULL;
     do {
@@ -195,15 +211,27 @@ bool parse_json_object(char** json_string, JsonObject* out_json_object) {
 
         //Key (string)
         key_value->key = parse_string(&current_position);
-        if (key_value->key == NULL) { return false; }
+        if (key_value->key == NULL)
+        {
+            return false; //FIXME: DamagedHelmet failing here
+        }
         
-        if (!consume(':', &current_position)) { return false; }
-        if (!parse_json_value(&current_position, &key_value->value)) { return false; }
+        if (!consume(':', &current_position))
+        {
+            return false;
+        }
+        if (!parse_json_value(&current_position, &key_value->value))
+        {
+            return false;
+        }
 
     } while (consume(',', &current_position));
 
     //Consume final closing bracket
-    if (!consume('}', &current_position)) { return false; }
+    if (!consume('}', &current_position))
+    {
+        return false;
+    }
 
     *json_string = current_position;
     return true;
@@ -620,16 +648,19 @@ bool gltf_load_asset(const char* filename, GltfAsset* out_asset) {
         }
 
         char* json_string = (char*) malloc(json_length + 1);
-        json_string[json_length] = 0; //Null-terminate string
+        json_string[json_length] = '\0'; //Null-terminate string
 
         if (fread(json_string, json_length, 1, file) != 0) {
             printf("json data: %s\n", json_string);
             char* modified_json_string = json_string;
-            parse_json_object(&modified_json_string, &out_asset->json);
-            //TODO: Error checking, make sure to free json string if we early-exit
+            const bool succeeded = parse_json_object(&modified_json_string, &out_asset->json);
+            //TODO: Make sure to clean up invalid json if we fail to parse it (inside parse_json_object)
         }
 
+        print_json_object(&out_asset->json, 0, stdout);
+
         free(json_string);
+        json_string = NULL;
 
         //BUFFERS
         {
