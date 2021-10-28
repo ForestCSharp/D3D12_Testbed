@@ -145,11 +145,6 @@ float4 ps_main(const PsInput input) : SV_TARGET
 
     // HDR tonemapping
     out_color = out_color / (out_color + float3(1,1,1));
-    
-    // gamma correct //TODO: is this necessary with SRGB render target?
-    float gamma = 1.0;
-    float gamma_factor = 1.0/gamma;
-    out_color = pow(out_color, float3(gamma_factor, gamma_factor, gamma_factor));
 
     return float4(out_color,1);
 }
