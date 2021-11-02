@@ -54,7 +54,7 @@ inline void wait_gpu_idle(ComPtr<ID3D12Device> device, ComPtr<ID3D12CommandQueue
 	WaitForSingleObject(fence_event, INFINITE);
 }
 
-struct Mesh
+struct GpuRenderData
 {
 	ComPtr<ID3D12Resource> vertex_buffer;
 	D3D12MA::Allocation* vertex_buffer_allocation = nullptr;
@@ -65,7 +65,7 @@ struct Mesh
 	D3D12_INDEX_BUFFER_VIEW index_buffer_view;
 
 	template <typename T>
-	Mesh(D3D12MA::Allocator* gpu_memory_allocator, std::vector<T> vertices, std::vector<UINT32> indices)
+	GpuRenderData(D3D12MA::Allocator* gpu_memory_allocator, std::vector<T> vertices, std::vector<UINT32> indices)
 	{
 		static_assert(!std::is_pointer<T>(), "vertices must be an array to some non-pointer type");
 		

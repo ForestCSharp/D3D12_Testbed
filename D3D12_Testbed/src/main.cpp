@@ -648,7 +648,7 @@ int main()
         3, 2, 6, 6, 7, 3  // top
 	};
 	
-	Mesh cube(gpu_memory_allocator, cube_vertices, cube_indices);
+	GpuRenderData cube(gpu_memory_allocator, cube_vertices, cube_indices);
 
 	//Setup Quad
 	struct QuadVertex
@@ -670,7 +670,7 @@ int main()
 		0, 1, 2, 1, 2, 3
     };
 
-	Mesh quad(gpu_memory_allocator, quad_vertices, quad_indices);
+	GpuRenderData quad(gpu_memory_allocator, quad_vertices, quad_indices);
 
 	auto render_to_cubemap_rtv_formats = { cubemap_format, cubemap_format, cubemap_format,
 																	   cubemap_format, cubemap_format, cubemap_format };
@@ -714,8 +714,6 @@ int main()
         .with_rtv_formats({specular_lut_format})
         .with_debug_name(L"specular_lut_pipeline_state")
         .build(device);
-
-	//TODO: FIXME: ^^^ resulting LUT still off (as compared to reference)
 
 	TConstantBuffer<SceneConstantBuffer> spherical_to_cube_scene(gpu_memory_allocator);
 	TConstantBuffer<InstanceConstantBuffer> spherical_to_cube_instance(gpu_memory_allocator);
@@ -904,26 +902,51 @@ int main()
 	diffuse_convolution_instance.release();
 	specular_prefilter_instance.release();
 
-	uint32_t model_to_render = 0;
-	const char* model_paths[] = {"data/meshes/DamagedHelmet.glb", "data/meshes/sphere.glb", "data/meshes/Monkey.glb", "data/meshes/LunaMoth.glb", "data/meshes/Cerberus.glb"};
+	uint32_t model_to_render_idx = 0;
+	const char* model_paths[] = {"data/meshes/FlightHelmet.glb", "data/meshes/DamagedHelmet.glb", "data/meshes/sphere.glb", "data/meshes/Monkey.glb"};
 
-	struct Primitive
+	struct GpuPrimitive
 	{
-		Mesh mesh;
-		optional<Texture> base_color_texture;
+		GpuRenderData render_data;
+
+		TConstantBufferArray<MeshRenderConstantBuffer, backbuffer_count> constant_buffers;
+
+		//TODO: Separate these, add to a 'material' struct
+		optional<Texture> base_color_texture;	
 		optional<Texture> metallic_roughness_texture;
 
-		Primitive(const Mesh& in_mesh, const optional<Texture>& in_base_color_texture, const optional<Texture>& in_metallic_roughness_texture)
-		: mesh(in_mesh)
+		GpuPrimitive(const GpuRenderData& in_render_data, D3D12MA::Allocator* in_gpu_memory_allocator, const optional<Texture>& in_base_color_texture, const optional<Texture>& in_metallic_roughness_texture)
+		: render_data(in_render_data)
+		, constant_buffers(in_gpu_memory_allocator)
 		, base_color_texture(in_base_color_texture)
 		, metallic_roughness_texture(in_metallic_roughness_texture)
+		{
+			//TODO: Setup initial cbuffer data?
+		}
+	};
+
+	struct GpuMesh
+	{
+		std::vector<GpuPrimitive> primitives;
+
+		GpuMesh();
+		GpuMesh(const std::vector<GpuPrimitive>& in_primitives)
+			: primitives(in_primitives)
 		{}
 	};
 
-	std::vector<std::vector<Primitive>> models;
+	struct GpuModel
+	{
+		std::vector<GpuMesh> meshes;
+	};
+
+	std::vector<GpuModel> models;
+
+	double total_time = 0.0;
 
 	for (uint32_t i = 0; i < _countof(model_paths); ++i)
 	{
+		clock_t start_time = clock();
 		GltfAsset gltf_asset;
 		if (!gltf_load_asset(model_paths[i], &gltf_asset))
 		{
@@ -932,121 +955,156 @@ int main()
 		}
 		
 		assert(gltf_asset.num_meshes > 0);
-		
-		std::vector<Primitive> primitives;
-		GltfMesh* gltf_mesh = &gltf_asset.meshes[0];
-		for (uint32_t prim_idx = 0; prim_idx < gltf_mesh->num_primitives; ++prim_idx)
+
+		GpuModel model;
+
+		for (uint32_t mesh_idx = 0; mesh_idx < gltf_asset.num_meshes; ++mesh_idx)
 		{
-			std::vector<GpuVertex> vertices;
-			std::vector<UINT32> indices;
+			std::vector<GpuPrimitive> primitives;
+			GltfMesh* gltf_mesh = &gltf_asset.meshes[mesh_idx];
+			for (uint32_t prim_idx = 0; prim_idx < gltf_mesh->num_primitives; ++prim_idx)
+			{
+				std::vector<GpuVertex> vertices;
+				std::vector<UINT32> indices;
 		
-			GltfPrimitive* gltf_primitive = &gltf_mesh->primitives[prim_idx];
+				GltfPrimitive* gltf_primitive = &gltf_mesh->primitives[prim_idx];
 	
-			//Vertices
-			uint8_t* positions_buffer = gltf_primitive->positions->buffer_view->buffer->data;
-			positions_buffer += gltf_accessor_get_initial_offset(gltf_primitive->positions);
-			uint32_t positions_byte_stride = gltf_accessor_get_stride(gltf_primitive->positions);
+				//Vertices
+				uint8_t* positions_buffer = gltf_primitive->positions->buffer_view->buffer->data;
+				positions_buffer += gltf_accessor_get_initial_offset(gltf_primitive->positions);
+				uint32_t positions_byte_stride = gltf_accessor_get_stride(gltf_primitive->positions);
 	
-			uint8_t* normals_buffer = gltf_primitive->normals->buffer_view->buffer->data;
-			normals_buffer += gltf_accessor_get_initial_offset(gltf_primitive->normals);
-			uint32_t normals_byte_stride = gltf_accessor_get_stride(gltf_primitive->normals);
+				uint8_t* normals_buffer = gltf_primitive->normals->buffer_view->buffer->data;
+				normals_buffer += gltf_accessor_get_initial_offset(gltf_primitive->normals);
+				uint32_t normals_byte_stride = gltf_accessor_get_stride(gltf_primitive->normals);
 	
-			uint8_t* uvs_buffer = gltf_primitive->texcoord0->buffer_view->buffer->data;
-			uvs_buffer += gltf_accessor_get_initial_offset(gltf_primitive->texcoord0);
-			uint32_t uvs_byte_stride = gltf_accessor_get_stride(gltf_primitive->texcoord0);
+				uint8_t* uvs_buffer = gltf_primitive->texcoord0->buffer_view->buffer->data;
+				uvs_buffer += gltf_accessor_get_initial_offset(gltf_primitive->texcoord0);
+				uint32_t uvs_byte_stride = gltf_accessor_get_stride(gltf_primitive->texcoord0);
 	
-			uint32_t vertices_count = gltf_primitive->positions->count;
-			vertices.reserve(vertices_count);
+				uint32_t vertices_count = gltf_primitive->positions->count;
+				vertices.reserve(vertices_count);
 	
-			for (uint32_t vert_idx = 0; vert_idx < vertices_count; ++vert_idx) 
-			{
-				GpuVertex vertex;
-				memcpy(&vertex.position, positions_buffer, positions_byte_stride);
-				memcpy(&vertex.normal, normals_buffer, normals_byte_stride);
-				vertex.color = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
-				memcpy(&vertex.uv, uvs_buffer, uvs_byte_stride);
-		
-				positions_buffer += positions_byte_stride;
-				normals_buffer += normals_byte_stride;
-				uvs_buffer += uvs_byte_stride;
-	
-				vertices.push_back(vertex);
-			}
-	
-			//Indices
-			uint8_t* indices_buffer = gltf_primitive->indices->buffer_view->buffer->data;
-			indices_buffer += gltf_accessor_get_initial_offset(gltf_primitive->indices);
-			uint32_t indices_byte_stride = gltf_accessor_get_stride(gltf_primitive->indices);
-	
-			uint32_t indices_count = gltf_primitive->indices->count;
-			indices.reserve(indices_count);
-	
-			for (uint32_t indices_idx = 0; indices_idx < indices_count; ++indices_idx) 
-			{
-				UINT32 index = 0;
-				memcpy(&index, indices_buffer, indices_byte_stride);
-				indices_buffer += indices_byte_stride;
-				indices.push_back(index);
-			}
-
-			optional<Texture> base_color_texture;
-			optional<Texture> metallic_roughness_texture;
-
-			if (gltf_primitive->material)
-			{
-				GltfPbrMetallicRoughness* gltf_pbr = &gltf_primitive->material->pbr_metallic_roughness;
-				if (GltfTexture* gltf_base_color_texture = gltf_pbr->base_color_texture)
+				for (uint32_t vert_idx = 0; vert_idx < vertices_count; ++vert_idx) 
 				{
-					GltfBufferView* gltf_buffer_view = gltf_base_color_texture->image->buffer_view;
-					GltfBuffer* gltf_buffer = gltf_buffer_view->buffer;
-
-					uint8_t* buffer_ptr = gltf_buffer->data + gltf_buffer_view->byte_offset;
-					size_t byte_length = gltf_buffer_view->byte_length;
-
-					base_color_texture = Texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, buffer_ptr, byte_length);
-					std::string base_color_string = std::string(gltf_mesh->name) + "_BaseColorTexture";
-					base_color_texture->set_name(base_color_string.c_str());
-					bindless_resource_manager.register_texture(*base_color_texture);
+					GpuVertex vertex;
+					memcpy(&vertex.position, positions_buffer, positions_byte_stride);
+					memcpy(&vertex.normal, normals_buffer, normals_byte_stride);
+					vertex.color = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
+					memcpy(&vertex.uv, uvs_buffer, uvs_byte_stride);
+		
+					positions_buffer += positions_byte_stride;
+					normals_buffer += normals_byte_stride;
+					uvs_buffer += uvs_byte_stride;
+	
+					vertices.push_back(vertex);
+				}
+	
+				//Indices
+				uint8_t* indices_buffer = gltf_primitive->indices->buffer_view->buffer->data;
+				indices_buffer += gltf_accessor_get_initial_offset(gltf_primitive->indices);
+				uint32_t indices_byte_stride = gltf_accessor_get_stride(gltf_primitive->indices);
+	
+				uint32_t indices_count = gltf_primitive->indices->count;
+				indices.reserve(indices_count);
+	
+				for (uint32_t indices_idx = 0; indices_idx < indices_count; ++indices_idx) 
+				{
+					UINT32 index = 0;
+					memcpy(&index, indices_buffer, indices_byte_stride);
+					indices_buffer += indices_byte_stride;
+					indices.push_back(index);
 				}
 
-				if (GltfTexture* gltf_metallic_roughness_texture = gltf_pbr->metallic_roughness_texture)
+				optional<Texture> base_color_texture;
+				optional<Texture> metallic_roughness_texture;
+				
+				if (gltf_primitive->material)
 				{
-					GltfBufferView* gltf_buffer_view = gltf_metallic_roughness_texture->image->buffer_view;
-					GltfBuffer* gltf_buffer = gltf_buffer_view->buffer;
-
-					uint8_t* buffer_ptr = gltf_buffer->data + gltf_buffer_view->byte_offset;
-					size_t byte_length = gltf_buffer_view->byte_length;
-
-					metallic_roughness_texture = Texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, buffer_ptr, byte_length);
-					std::string base_color_string = std::string(gltf_mesh->name) + "_MetallicRoughnessTexture";
-					metallic_roughness_texture->set_name(base_color_string.c_str());
-					bindless_resource_manager.register_texture(*metallic_roughness_texture);
+					GltfPbrMetallicRoughness* gltf_pbr = &gltf_primitive->material->pbr_metallic_roughness;
+					if (GltfTexture* gltf_base_color_texture = gltf_pbr->base_color_texture)
+					{
+						GltfBufferView* gltf_buffer_view = gltf_base_color_texture->image->buffer_view;
+						GltfBuffer* gltf_buffer = gltf_buffer_view->buffer;
+				
+						uint8_t* buffer_ptr = gltf_buffer->data + gltf_buffer_view->byte_offset;
+						size_t byte_length = gltf_buffer_view->byte_length;
+				
+						base_color_texture = Texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, buffer_ptr, byte_length);
+						std::string base_color_string = std::string(gltf_mesh->name) + "_BaseColorTexture";
+						base_color_texture->set_name(base_color_string.c_str());
+						bindless_resource_manager.register_texture(*base_color_texture);
+					}
+				
+					if (GltfTexture* gltf_metallic_roughness_texture = gltf_pbr->metallic_roughness_texture)
+					{
+						GltfBufferView* gltf_buffer_view = gltf_metallic_roughness_texture->image->buffer_view;
+						GltfBuffer* gltf_buffer = gltf_buffer_view->buffer;
+				
+						uint8_t* buffer_ptr = gltf_buffer->data + gltf_buffer_view->byte_offset;
+						size_t byte_length = gltf_buffer_view->byte_length;
+				
+						metallic_roughness_texture = Texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, buffer_ptr, byte_length);
+						std::string base_color_string = std::string(gltf_mesh->name) + "_MetallicRoughnessTexture";
+						metallic_roughness_texture->set_name(base_color_string.c_str());
+						bindless_resource_manager.register_texture(*metallic_roughness_texture);
+					}
 				}
+
+				primitives.emplace_back(GpuPrimitive(GpuRenderData(gpu_memory_allocator, vertices, indices), gpu_memory_allocator, base_color_texture, metallic_roughness_texture));
 			}
 
-			primitives.emplace_back(Primitive(Mesh(gpu_memory_allocator, vertices, indices), base_color_texture, metallic_roughness_texture));
+			// GpuMesh mesh;
+			// mesh.primitives = primitives;
+			model.meshes.push_back(GpuMesh(primitives));
 		}
 
-		models.push_back(primitives);
+		models.push_back(model);
 
 		gltf_free_asset(&gltf_asset);
+
+		clock_t end_time = clock();
+		const double model_time = static_cast<double>(end_time - start_time) / CLOCKS_PER_SEC;
+		printf("Model Path: \"%s\" Load Time: %f\n", model_paths[i], model_time);
+		total_time += model_time;
 	}
+
+	printf("Total Time Loading Models: %f\n", total_time);
 
 	TConstantBufferArray<SceneConstantBuffer, backbuffer_count> scene_constant_buffers(gpu_memory_allocator);
 
 	//Eventually these will hold per-frame data (transform, etc.)
-	TConstantBufferArray<MeshRenderConstantBuffer, backbuffer_count> mesh_constant_buffers(gpu_memory_allocator);
+	// TConstantBufferArray<MeshRenderConstantBuffer, backbuffer_count> mesh_constant_buffers(gpu_memory_allocator); //TODO: Move into GpuPrimitive
 	TConstantBufferArray<InstanceConstantBuffer, backbuffer_count> skybox_constant_buffers(gpu_memory_allocator);
 	TConstantBufferArray<TextureViewerData, backbuffer_count> texture_viewer_constant_buffers(gpu_memory_allocator);
 
 	//fill texture indices on instance data
-	for (size_t i = 0; i < backbuffer_count; ++i)
+	
+	// for (size_t i = 0; i < backbuffer_count; ++i)
+	// {
+	// 	auto& data = mesh_constant_buffers.data(i);
+	// 	data.diffuse_ibl_texture_index = ibl_cubemap_texture.bindless_index;
+	// 	data.specular_ibl_texture_index = specular_cubemap_texture.bindless_index;
+	// 	data.specular_ibl_mip_count = specular_cubemap_texture.resource->GetDesc().MipLevels;
+	// 	data.specular_lut_texture_index = specular_lut_texture.bindless_index;
+	// }
+
+	for (GpuModel& model : models)
 	{
-		auto& data = mesh_constant_buffers.data(i);
-		data.diffuse_ibl_texture_index = ibl_cubemap_texture.bindless_index;
-		data.specular_ibl_texture_index = specular_cubemap_texture.bindless_index;
-		data.specular_ibl_mip_count = specular_cubemap_texture.resource->GetDesc().MipLevels;
-		data.specular_lut_texture_index = specular_lut_texture.bindless_index;
+		for (GpuMesh& mesh : model.meshes)
+		{
+			for (GpuPrimitive& primitive : mesh.primitives)
+			{
+				for (size_t i = 0; i < backbuffer_count; ++i)
+				{
+					auto& data = primitive.constant_buffers.data(i);
+					data.diffuse_ibl_texture_index = ibl_cubemap_texture.bindless_index;
+					data.specular_ibl_texture_index = specular_cubemap_texture.bindless_index;
+					data.specular_ibl_mip_count = specular_cubemap_texture.resource->GetDesc().MipLevels;
+					data.specular_lut_texture_index = specular_lut_texture.bindless_index;
+				}
+			}
+		}
 	}
 
 	XMVECTOR cam_pos	 = XMVectorSet(0.f, -10.f, 30.f, 1.f);
@@ -1173,14 +1231,14 @@ int main()
 			if (ImGui::CollapsingHeader("Model"))
 			{
 				ImGui::Indent();
-				if (ImGui::BeginCombo("Model to Render", model_paths[static_cast<size_t>(model_to_render)]))
+				if (ImGui::BeginCombo("Model to Render", model_paths[static_cast<size_t>(model_to_render_idx)]))
 				{
 					for (uint32_t i = 0; i < models.size(); ++i)
 					{
-						const bool is_selected = i == model_to_render;
+						const bool is_selected = i == model_to_render_idx;
 						if (ImGui::Selectable(model_paths[i], is_selected))
 						{
-							model_to_render = i;
+							model_to_render_idx = i;
 						}
 
 						if (is_selected)
@@ -1206,18 +1264,21 @@ int main()
 				{
 					std::vector<Texture*> debug_view_textures = {&specular_lut_texture, &reference_lut};
 
-					for (auto& primitives : models)
+					for (auto& model : models)
 					{
-						for (auto& primitive : primitives)
+						for (auto& mesh : model.meshes)
 						{
-							if (primitive.base_color_texture && primitive.base_color_texture->bindless_index != BINDLESS_INVALID_INDEX)
+							for (auto& primitive : mesh.primitives)
 							{
-								debug_view_textures.push_back(&(*primitive.base_color_texture));
-							}
+								if (primitive.base_color_texture && primitive.base_color_texture->bindless_index != BINDLESS_INVALID_INDEX)
+								{
+									debug_view_textures.push_back(&(*primitive.base_color_texture));
+								}
 
-							if (primitive.metallic_roughness_texture && primitive.metallic_roughness_texture->bindless_index != BINDLESS_INVALID_INDEX)
-							{
-								debug_view_textures.push_back(&(*primitive.metallic_roughness_texture));
+								if (primitive.metallic_roughness_texture && primitive.metallic_roughness_texture->bindless_index != BINDLESS_INVALID_INDEX)
+								{
+									debug_view_textures.push_back(&(*primitive.metallic_roughness_texture));
+								}
 							}
 						}
 					}
@@ -1317,11 +1378,20 @@ int main()
 			skybox_constant_buffers.data(frame_resources.frame_index).texture_index = current_skybox_texture->bindless_index;
 			skybox_constant_buffers.data(frame_resources.frame_index).texture_lod = skybox_texture_lod;
 
-			mesh_constant_buffers.data(frame_resources.frame_index).specular_lut_texture_index = use_reference_lut ? reference_lut.bindless_index : specular_lut_texture.bindless_index;
-
-			//TODO: per-frame cbuffer per primitive
-			mesh_constant_buffers.data(frame_resources.frame_index).base_color_texture_index = models[0][0].base_color_texture->bindless_index;
-			mesh_constant_buffers.data(frame_resources.frame_index).metallic_roughness_texture_index = models[0][0].metallic_roughness_texture->bindless_index;
+			GpuModel& model_to_render = models[model_to_render_idx];
+			
+			for (GpuMesh& mesh : model_to_render.meshes)
+			{
+				for (GpuPrimitive& primitive : mesh.primitives)
+				{
+					primitive.constant_buffers.data(frame_resources.frame_index).specular_lut_texture_index = use_reference_lut ? reference_lut.bindless_index : specular_lut_texture.bindless_index;
+					//TODO: Below only needs to be set up once
+					const bool has_base_color = primitive.base_color_texture.has_value();
+					primitive.constant_buffers.data(frame_resources.frame_index).base_color_texture_index = has_base_color ? primitive.base_color_texture->bindless_index : BINDLESS_INVALID_INDEX;
+					const bool has_metallic_rough = primitive.metallic_roughness_texture.has_value();
+					primitive.constant_buffers.data(frame_resources.frame_index).metallic_roughness_texture_index = has_metallic_rough ? primitive.metallic_roughness_texture->bindless_index : BINDLESS_INVALID_INDEX;
+				}
+			}
 			
 			texture_viewer_constant_buffers.data(frame_resources.frame_index).texture_index = debug_texture ? debug_texture->bindless_index : BINDLESS_INVALID_INDEX;
 			texture_viewer_constant_buffers.data(frame_resources.frame_index).texture_lod = debug_texture ? debug_texture->bindless_index : BINDLESS_INVALID_INDEX;
@@ -1337,8 +1407,7 @@ int main()
 
 			//Slot 0: scene cbuffer
 			command_list->SetGraphicsRootConstantBufferView(0, scene_constant_buffers.get_gpu_virtual_address(frame_resources.frame_index));
-			//Slot 1: instance cbuffer
-			command_list->SetGraphicsRootConstantBufferView(1, mesh_constant_buffers.get_gpu_virtual_address(frame_resources.frame_index));
+			//Slot 1: set per-primitive
 			//Slot 2: bindless texture table
 			command_list->SetGraphicsRootDescriptorTable(2, bindless_resource_manager.get_texture_gpu_handle());
 			//Slot 3: bindless cubemap table
@@ -1374,13 +1443,19 @@ int main()
 			command_list->ClearRenderTargetView(rtv_handle, clear_color, 0, nullptr);
 			command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 			
-			for (Primitive& primitive : models[static_cast<size_t>(model_to_render)])
+			for (GpuMesh& mesh : model_to_render.meshes)
 			{
-				Mesh& mesh = primitive.mesh;
-				//TODO: set material CBV
-				command_list->IASetVertexBuffers(0, 1, &mesh.vertex_buffer_view);
-				command_list->IASetIndexBuffer(&mesh.index_buffer_view);
-				command_list->DrawIndexedInstanced(mesh.index_count(), mesh_instance_count, 0, 0, 0);
+				for (GpuPrimitive& primitive : mesh.primitives)
+				{
+					//Slot 1: set instance cbuffer
+					command_list->SetGraphicsRootConstantBufferView(1, primitive.constant_buffers.get_gpu_virtual_address(frame_resources.frame_index));
+					
+					GpuRenderData& _mesh = primitive.render_data;
+					//TODO: set material CBV
+					command_list->IASetVertexBuffers(0, 1, &_mesh.vertex_buffer_view);
+					command_list->IASetIndexBuffer(&_mesh.index_buffer_view);
+					command_list->DrawIndexedInstanced(_mesh.index_count(), mesh_instance_count, 0, 0, 0);
+				}
 			}
 
 			//Render Skybox
@@ -1461,20 +1536,25 @@ int main()
 		specular_lut_texture.release();
 		reference_lut.release();
 
-		for (auto& primitives : models)
+		for (GpuModel& model : models)
 		{
-			for (Primitive& primitive : primitives)
+			for (GpuMesh& mesh : model.meshes)
 			{
-				primitive.mesh.release();
-				
-				if (primitive.base_color_texture)
+				for (GpuPrimitive& primitive : mesh.primitives)
 				{
-					primitive.base_color_texture->release();
-				}
+					primitive.render_data.release();
 
-				if (primitive.metallic_roughness_texture)
-				{
-					primitive.metallic_roughness_texture->release();
+					primitive.constant_buffers.release();
+				
+					if (primitive.base_color_texture)
+					{
+						primitive.base_color_texture->release();
+					}
+
+					if (primitive.metallic_roughness_texture)
+					{
+						primitive.metallic_roughness_texture->release();
+					}
 				}
 			}
 		}
@@ -1483,7 +1563,6 @@ int main()
 		quad.release();
 
 		scene_constant_buffers.release();
-		mesh_constant_buffers.release();
 		skybox_constant_buffers.release();
 		texture_viewer_constant_buffers.release();
 
