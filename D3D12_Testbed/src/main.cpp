@@ -719,6 +719,21 @@ int main()
 	TConstantBuffer<InstanceConstantBuffer> spherical_to_cube_instance(gpu_memory_allocator);
 	TConstantBuffer<InstanceConstantBuffer> diffuse_convolution_instance(gpu_memory_allocator);
 
+	//FCS TODO: BEGIN Testing TextureBuilder
+	Texture test_texture = TextureBuilder()
+		.with_format(DXGI_FORMAT_R32G32B32A32_FLOAT)
+		.with_width(24)
+		.with_height(24)
+		.with_debug_name("texture_builder_test")
+		.build(gpu_memory_allocator);
+
+	//TODO: builder options for filepath, binary data, etc.
+
+	bindless_resource_manager.register_texture(test_texture); //FCS TODO: hopefully it shows up in resource manager
+
+	// test_texture.release();
+	//FCS TODO: END Testing TextureBuilder
+
 	XMVECTOR cube_cam_pos	  = XMVectorSet(0.f, 0.f, 0.f, 1.f);
 	XMVECTOR cube_cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);
 	XMVECTOR cube_cam_up	  = XMVectorSet(0.f, 1.f, 0.f, 0.f);
@@ -1029,7 +1044,8 @@ int main()
 				
 						uint8_t* buffer_ptr = gltf_buffer->data + gltf_buffer_view->byte_offset;
 						size_t byte_length = gltf_buffer_view->byte_length;
-				
+
+						//FCS TODO: FIXME: Don't load as float data... takes forever
 						base_color_texture = Texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, buffer_ptr, byte_length);
 						std::string base_color_string = std::string(gltf_mesh->name) + "_BaseColorTexture";
 						base_color_texture->set_name(base_color_string.c_str());
@@ -1345,7 +1361,7 @@ int main()
 				if (is_key_down('Q')) { cam_pos -= cam_up	   * translation_speed; }
 
 				//Cam Rotation Control
-				if (is_key_down(VK_LBUTTON))
+				if (is_key_down(VK_LBUTTON) || is_key_down(VK_RBUTTON))
 				{
 					const float rot_rate = 4.0f;
 
@@ -1450,11 +1466,11 @@ int main()
 					//Slot 1: set instance cbuffer
 					command_list->SetGraphicsRootConstantBufferView(1, primitive.constant_buffers.get_gpu_virtual_address(frame_resources.frame_index));
 					
-					GpuRenderData& _mesh = primitive.render_data;
-					//TODO: set material CBV
-					command_list->IASetVertexBuffers(0, 1, &_mesh.vertex_buffer_view);
-					command_list->IASetIndexBuffer(&_mesh.index_buffer_view);
-					command_list->DrawIndexedInstanced(_mesh.index_count(), mesh_instance_count, 0, 0, 0);
+					const GpuRenderData& render_data = primitive.render_data;
+
+					command_list->IASetVertexBuffers(0, 1, &render_data.vertex_buffer_view);
+					command_list->IASetIndexBuffer(&render_data.index_buffer_view);
+					command_list->DrawIndexedInstanced(render_data.index_count(), mesh_instance_count, 0, 0, 0);
 				}
 			}
 

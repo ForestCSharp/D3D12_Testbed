@@ -17,16 +17,6 @@ using Microsoft::WRL::ComPtr;
 
 #include "d3d12_helpers.h"
 
-//TODO: TextureBuilder:
-/* TextureBuilder()
-.width(4)
-.height(4)
-.format(...)
-.array_count(6)
-.allow_render_target(true)
-.build(device, gpu_memory_allocator);
-*/
-
 constexpr int BINDLESS_INVALID_INDEX = -1;
 
 struct Texture
@@ -47,29 +37,58 @@ struct Texture
 
 	std::string debug_name;
 
+	Texture(D3D12MA::Allocator* gpu_memory_allocator, const D3D12MA::ALLOCATION_DESC& texture_alloc_desc, const D3D12_RESOURCE_DESC& resource_desc)
+	{
+		//FCS TODO: Do this in TextureBuilder?
+		const bool can_have_clear_value = (resource_desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+									   || (resource_desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+
+		D3D12_CLEAR_VALUE clear_value = {};
+		clear_value.Format = resource_desc.Format;
+
+		HR_CHECK(gpu_memory_allocator->CreateResource(
+			&texture_alloc_desc,
+			&resource_desc,
+			D3D12_RESOURCE_STATE_COMMON,
+			can_have_clear_value ? &clear_value : nullptr,
+			&allocation,
+			IID_PPV_ARGS(&resource)
+		));
+
+		//FCS TODO: For usage with TextureBuilder... test
+	}
+	
 	Texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format, const UINT mip_levels, const D3D12_RESOURCE_FLAGS flags, const UINT image_width, const UINT image_height, const UINT image_count)
 	{
 		create_texture(device, gpu_memory_allocator, format, mip_levels, flags, image_width, image_height, image_count);
 		set_name("DefaultTexture");
 	}
 
-	//TODO: Helper to do work after stb image load (copying float data via staging buffer)
-
 	//Loads texture from binary data representing an image file-format
-	Texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue, const DXGI_FORMAT format, const UINT mip_levels, uint8_t* buffer, int len)
+	Texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue, const DXGI_FORMAT format, const UINT mip_levels, const uint8_t* buffer, const int buffer_length)
 	{
 		int image_width, image_height;
 
 		const int desired_channels = 4; //We want an alpha channel
 		stbi_set_flip_vertically_on_load(false); //TODO: arg for this in TextureBuilder
-		if (float* image_data = stbi_loadf_from_memory(buffer, len, &image_width, &image_height, nullptr, desired_channels))
+		if (float* image_data = stbi_loadf_from_memory(buffer, buffer_length, &image_width, &image_height, nullptr, desired_channels))
 		{
 			create_texture(device, gpu_memory_allocator, format, mip_levels, D3D12_RESOURCE_FLAG_NONE, image_width, image_height, 1);
-
+		
 			upload_texture_data(device, gpu_memory_allocator, command_queue, desired_channels, image_data, image_width, image_height);
-
+		
 			stbi_image_free(image_data);
 		}
+
+		//FCS TODO: only load as floats if input data is HDR: stbi_is_hdr(...), stbi_is_hdr_from_memory(...), etc.
+		// if (stbi_uc* image_data = stbi_load_from_memory(buffer, buffer_length, &image_width, &image_height, nullptr, desired_channels))
+		// {
+		// 	create_texture(device, gpu_memory_allocator, format, mip_levels, D3D12_RESOURCE_FLAG_NONE, image_width, image_height, 1);
+		//
+		// 	upload_texture_data(device, gpu_memory_allocator, command_queue, desired_channels, image_data, image_width, image_height);
+		//
+		// 	stbi_image_free(image_data);
+		// }
 	}
 
 	//Loads a single texture from file
@@ -137,7 +156,8 @@ struct Texture
 		}
 	}
 
-	void upload_texture_data(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue, const int desired_channels, float* image_data, const int image_width, const int image_height)
+	//FCS TODO: Make Templated over image_data type
+	void upload_texture_data(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const ComPtr<ID3D12CommandQueue> command_queue, const int desired_channels, const float* image_data, const int image_width, const int image_height) const
 	{
 		const size_t image_pixel_size = desired_channels * sizeof(float);
 
@@ -326,6 +346,95 @@ struct Texture
 			allocation->Release();
 			allocation = nullptr;
 		}
+	}
+};
+
+//TODO: TextureBuilder:
+/* TextureBuilder()
+.width(4)
+.height(4)
+.format(...)
+.array_count(6)
+.allow_render_target(true)
+.build(device, gpu_memory_allocator);
+*/
+
+struct TextureBuilder
+{
+	D3D12MA::ALLOCATION_DESC texture_alloc_desc = {};
+	D3D12_RESOURCE_DESC texture_desc = {};
+
+	std::string debug_name;
+	
+	TextureBuilder()
+	{
+		texture_alloc_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+		texture_desc.DepthOrArraySize = 1;
+		texture_desc.MipLevels = 1;
+		texture_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; //FCS TODO: also a fn for this
+		texture_desc.Alignment = 0; //FCS TODO: also fn for this
+		texture_desc.SampleDesc.Count = 1; //FCS TODO: also fn for this
+		texture_desc.SampleDesc.Quality = 0; //FCS TODO: also fn for this
+		texture_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN; //FCS TODO: also fn for this
+	}
+
+	TextureBuilder& with_width(const UINT64 in_width)
+	{
+		texture_desc.Width = in_width;
+		return *this;
+	}
+
+	TextureBuilder& with_height(const UINT64 in_height)
+	{
+		texture_desc.Height = in_height;
+		return *this;
+	}
+
+	TextureBuilder& with_array_size(const UINT16 in_array_size)
+	{
+		texture_desc.DepthOrArraySize = in_array_size;
+		return *this;
+	}
+
+	TextureBuilder& with_mip_levels(const UINT16 in_mip_levels)
+	{
+		texture_desc.MipLevels = in_mip_levels;
+		return *this;
+	}
+
+	TextureBuilder& with_format(const DXGI_FORMAT in_format)
+	{
+		texture_desc.Format = in_format;
+		return *this;
+	}
+
+	TextureBuilder& with_resource_flags(const D3D12_RESOURCE_FLAGS in_resource_flags)
+	{
+		texture_desc.Flags = in_resource_flags;
+		return *this;
+	}
+
+	TextureBuilder& with_debug_name(const char* in_debug_name)
+	{
+		debug_name = in_debug_name;
+		return *this;
+	}
+
+	//TODO: fn to use staging buffer that stores reference to command_queue?
+
+	Texture build(D3D12MA::Allocator* gpu_memory_allocator) const
+	{
+		Texture out_texture(gpu_memory_allocator, texture_alloc_desc, texture_desc);
+
+		//FCS TODO: Handle uploads
+
+		if (!debug_name.empty())
+		{
+			out_texture.set_name(debug_name.c_str());
+		}
+
+		return out_texture;
 	}
 };
 
