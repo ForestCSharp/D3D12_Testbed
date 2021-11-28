@@ -53,16 +53,8 @@ PsInput vs_main(const float2 position : POSITION, const  float2 uv : TEXCOORD0)
     return ps_input;
 }
 
-//TODO: FIXME: this seems to match it up with the reference, but that's likely because the reference is stored in SRGB, this should probably be removed
-static const float SRGB_INVERSE_GAMMA = 2.2;
-
-float3 srgb_to_rgb_approx(float3 srgb) {
-    return pow(srgb, float3(SRGB_INVERSE_GAMMA, SRGB_INVERSE_GAMMA, SRGB_INVERSE_GAMMA));
-}
-
 float2 ps_main(const PsInput input) : SV_TARGET
 {
     float2 integrated_brdf = IntegrateBRDF(input.uv.x, input.uv.y);
-	float3 non_srgb = srgb_to_rgb_approx(float3(integrated_brdf, 0.0));
-    return non_srgb.xy;
+    return integrated_brdf.xy;
 }

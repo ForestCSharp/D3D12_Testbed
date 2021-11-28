@@ -156,10 +156,10 @@ struct Texture
 		}
 	}
 
-	//FCS TODO: Make Templated over image_data type
-	void upload_texture_data(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const ComPtr<ID3D12CommandQueue> command_queue, const int desired_channels, const float* image_data, const int image_width, const int image_height) const
+	template <typename T>
+	void upload_texture_data(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const ComPtr<ID3D12CommandQueue> command_queue, const int desired_channels, const T* image_data, const int image_width, const int image_height) const
 	{
-		const size_t image_pixel_size = desired_channels * sizeof(float);
+		const size_t image_pixel_size = desired_channels * sizeof(T);
 
 			ComPtr<ID3D12Resource> staging_buffer;
 			D3D12MA::Allocation* staging_buffer_allocation = nullptr;
@@ -366,6 +366,8 @@ struct TextureBuilder
 
 	std::string debug_name;
 	
+	std::vector<uint8_t> binary_file_data;
+	
 	TextureBuilder()
 	{
 		texture_alloc_desc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
@@ -379,13 +381,13 @@ struct TextureBuilder
 		texture_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN; //FCS TODO: also fn for this
 	}
 
-	TextureBuilder& with_width(const UINT64 in_width)
+	TextureBuilder& with_width(const UINT in_width)
 	{
 		texture_desc.Width = in_width;
 		return *this;
 	}
 
-	TextureBuilder& with_height(const UINT64 in_height)
+	TextureBuilder& with_height(const UINT in_height)
 	{
 		texture_desc.Height = in_height;
 		return *this;
@@ -421,24 +423,119 @@ struct TextureBuilder
 		return *this;
 	}
 
-	//TODO: fn to use staging buffer that stores reference to command_queue?
-
-	Texture build(D3D12MA::Allocator* gpu_memory_allocator) const
+	TextureBuilder& from_file(const char* in_file)
 	{
-		Texture out_texture(gpu_memory_allocator, texture_alloc_desc, texture_desc);
+		if (FILE *fp = open_binary_file(in_file)) //See gltf.h
+		{
+			binary_file_data.clear();
+			//Go to the end of the file. 
+			if (fseek(fp, 0L, SEEK_END) == 0)
+			{
+				const long buffer_size = ftell(fp);
+				if (buffer_size > 0)
+				{
+					binary_file_data.resize(buffer_size);
+					//Go back to the start of the file. 
+					if (fseek(fp, 0L, SEEK_SET) != 0) { /* Error */ }
 
-		//FCS TODO: Handle uploads
+					//Read the entire file into memory. 
+					fread(binary_file_data.data(), sizeof(char), buffer_size, fp);
+					if (ferror(fp) != 0)
+					{
+						printf("Error Reading File: %s\n", in_file);
+					}
+				}		
+			}
+			fclose(fp);
+		}
+		return* this;
+	}
+
+	TextureBuilder& from_binary_data(uint8_t* buffer, const size_t buffer_len)
+	{
+		binary_file_data.clear();
+		binary_file_data.assign(buffer, buffer + buffer_len);
+		return *this;
+	}
+
+	//TODO: from_file and from_binary_data should take in required GPU objects and store refs to them?
+	
+	Texture build(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const ComPtr<ID3D12CommandQueue> command_queue)
+	{
+		if (!binary_file_data.empty())
+		{
+			const int32_t required_components = 4;	 //TODO: arg for this in TextureBuilder?
+			stbi_set_flip_vertically_on_load(false);  //TODO: arg for this in TextureBuilder
+
+			//FCS TODO: Properly handle 
+			
+			const bool is_file_hdr = stbi_is_hdr_from_memory(binary_file_data.data(), binary_file_data.size());
+			if (is_file_hdr)
+			{
+				int image_width, image_height, image_components;
+				if (float* image_data = stbi_loadf_from_memory(binary_file_data.data(), binary_file_data.size(), &image_width, &image_height, &image_components, required_components))
+				{
+					with_width(image_width);
+					with_height(image_height);
+					with_format(DXGI_FORMAT_R32G32B32A32_FLOAT); //FCS TODO: Don't assume format
+
+					//FCS TODO: BEGIN DUPLICATE CODE
+					Texture out_texture(gpu_memory_allocator, texture_alloc_desc, texture_desc);
+
+					if (!debug_name.empty())
+					{
+						out_texture.set_name(debug_name.c_str());
+					}
+					//FCS TODO: END DUPLICATE CODE
+
+					out_texture.upload_texture_data(device, gpu_memory_allocator, command_queue, required_components, image_data, image_width, image_height);
+		
+					stbi_image_free(image_data);
+
+					return out_texture; //FCS TODO: Unify returns
+				}
+			}
+			else
+			{
+				int image_width, image_height, image_components;
+				if (stbi_uc* image_data = stbi_load_from_memory(binary_file_data.data(), binary_file_data.size(), &image_width, &image_height, &image_components, required_components))
+				{
+					with_width(image_width);
+					with_height(image_height);
+					with_format(DXGI_FORMAT_R8G8B8A8_UNORM_SRGB); //FCS TODO: Don't assume format
+
+					//FCS TODO: BEGIN DUPLICATE CODE
+					Texture out_texture(gpu_memory_allocator, texture_alloc_desc, texture_desc);
+
+					if (!debug_name.empty())
+					{
+						out_texture.set_name(debug_name.c_str());
+					}
+					//FCS TODO: END DUPLICATE CODE
+
+					out_texture.upload_texture_data(device, gpu_memory_allocator, command_queue, required_components, image_data, image_width, image_height);
+		
+					stbi_image_free(image_data);
+
+					return out_texture; //FCS TODO: Unify returns
+				}
+			}
+		}
+
+		//FCS TODO: BEGIN DUPLICATE CODE
+		Texture out_texture(gpu_memory_allocator, texture_alloc_desc, texture_desc);
 
 		if (!debug_name.empty())
 		{
 			out_texture.set_name(debug_name.c_str());
 		}
+		//FCS TODO: END DUPLICATE CODE
 
-		return out_texture;
+		return out_texture; //FCS TODO: Unify returns
 	}
 };
 
-//FCS TODO: bindless samplers?
+//FCS TODO: bindless samplers
 
 constexpr UINT BINDLESS_TABLE_SIZE		   = 10000;
 constexpr UINT BINDLESS_DESC_TYPES		   = 2;

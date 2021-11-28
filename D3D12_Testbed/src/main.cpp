@@ -607,8 +607,10 @@ int main()
 	Texture specular_lut_texture(device, gpu_memory_allocator, specular_lut_format, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, specular_lut_size, specular_lut_size, 1);
 	specular_lut_texture.set_name("Specular LUT Texture");
 
-	Texture reference_lut(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, "data/textures/Reference_Lut.png");
-	reference_lut.set_name("REFERENCE LUT");
+	Texture reference_lut = TextureBuilder()
+		.from_file("data/textures/Reference_Lut.png")
+		.with_debug_name("REFERENCE LUT")
+		.build(device, gpu_memory_allocator, command_queue);
 
 	BindlessResourceManager bindless_resource_manager(device, gpu_memory_allocator);
 
@@ -725,11 +727,23 @@ int main()
 		.with_width(24)
 		.with_height(24)
 		.with_debug_name("texture_builder_test")
-		.build(gpu_memory_allocator);
+		.build(device, gpu_memory_allocator, command_queue);
+
+	//FCS TODO:
+	Texture ldr_file_texture = TextureBuilder()
+		.from_file("data/textures/Reference_Lut.png")
+		.build(device, gpu_memory_allocator, command_queue);
+
+	//FCS TODO:
+	Texture hdr_file_texture = TextureBuilder()
+		.from_file("data/hdr/Frozen_Waterfall.hdr")
+		.build(device, gpu_memory_allocator, command_queue);
 
 	//TODO: builder options for filepath, binary data, etc.
 
-	bindless_resource_manager.register_texture(test_texture); //FCS TODO: hopefully it shows up in resource manager
+	bindless_resource_manager.register_texture(test_texture);
+	bindless_resource_manager.register_texture(ldr_file_texture);
+	bindless_resource_manager.register_texture(hdr_file_texture);
 
 	// test_texture.release();
 	//FCS TODO: END Testing TextureBuilder
@@ -852,8 +866,8 @@ int main()
 
 			command_list->OMSetRenderTargets(static_cast<UINT>(specular_cubemap_texture.per_mip_rtv_handles[mip_index].size()), specular_cubemap_texture.per_mip_rtv_handles[mip_index].data(), FALSE, nullptr);
 
-			const float mip_width  = static_cast<float>(specular_cube_size) * powf(0.5f, mip_index);
-			const float mip_height = static_cast<float>(specular_cube_size) * powf(0.5f, mip_index);
+			const float mip_width  = static_cast<float>(specular_cube_size) * powf(0.5f, (float)mip_index);
+			const float mip_height = static_cast<float>(specular_cube_size) * powf(0.5f, (float)mip_index);
 
 			D3D12_VIEWPORT viewport = {};
 			viewport.TopLeftX = 0.0f;
@@ -1045,8 +1059,7 @@ int main()
 						uint8_t* buffer_ptr = gltf_buffer->data + gltf_buffer_view->byte_offset;
 						size_t byte_length = gltf_buffer_view->byte_length;
 
-						//FCS TODO: FIXME: Don't load as float data... takes forever
-						base_color_texture = Texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, buffer_ptr, byte_length);
+						base_color_texture = TextureBuilder().from_binary_data(buffer_ptr, byte_length).build(device, gpu_memory_allocator, command_queue);
 						std::string base_color_string = std::string(gltf_mesh->name) + "_BaseColorTexture";
 						base_color_texture->set_name(base_color_string.c_str());
 						bindless_resource_manager.register_texture(*base_color_texture);
@@ -1060,7 +1073,7 @@ int main()
 						uint8_t* buffer_ptr = gltf_buffer->data + gltf_buffer_view->byte_offset;
 						size_t byte_length = gltf_buffer_view->byte_length;
 				
-						metallic_roughness_texture = Texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, buffer_ptr, byte_length);
+						metallic_roughness_texture = TextureBuilder().from_binary_data(buffer_ptr, byte_length).build(device, gpu_memory_allocator, command_queue);
 						std::string base_color_string = std::string(gltf_mesh->name) + "_MetallicRoughnessTexture";
 						metallic_roughness_texture->set_name(base_color_string.c_str());
 						bindless_resource_manager.register_texture(*metallic_roughness_texture);

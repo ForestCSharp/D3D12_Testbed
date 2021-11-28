@@ -108,19 +108,20 @@ float4 ps_main(const PsInput input) : SV_TARGET
 
     float3 brdf_lighting = float3(0,0,0);
 
-    for (int i = 0; i < NUM_LIGHTS; ++i)
-    {
-        lights[i].color = float3(1,1,1);
-        lights[i].intensity = 50.0f;
-        
-        const float3 to_light = lights[i].pos - input.world_pos;
-        const float distance_to_light_squared = pow(length(to_light),2);
-        const float3 light_dir = normalize(to_light);
-        const float light_attenuation = 1.0 / distance_to_light_squared * lights[i].intensity;
-        const float3 radiance = lights[i].color * light_attenuation;
-
-        brdf_lighting += brdf_main(normal, light_dir, view_dir, albedo, f0, roughness, metallic, radiance);
-    }
+    //FCS TODO: Turning off lights
+    // for (int i = 0; i < NUM_LIGHTS; ++i)
+    // {
+    //     lights[i].color = float3(1,1,1);
+    //     lights[i].intensity = 50.0f;
+    //     
+    //     const float3 to_light = lights[i].pos - input.world_pos;
+    //     const float distance_to_light_squared = pow(length(to_light),2);
+    //     const float3 light_dir = normalize(to_light);
+    //     const float light_attenuation = 1.0 / distance_to_light_squared * lights[i].intensity;
+    //     const float3 radiance = lights[i].color * light_attenuation;
+    //
+    //     brdf_lighting += brdf_main(normal, light_dir, view_dir, albedo, f0, roughness, metallic, radiance);
+    // }
 
     float n_dot_v = saturate(dot(normal, view_dir));
     float3 F = fresnel_schlick_roughness(n_dot_v, f0, roughness);
