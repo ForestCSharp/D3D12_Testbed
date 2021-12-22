@@ -269,7 +269,7 @@ int main()
 			continue;
 		}
 
-		// printf("Adapter: %ls Dedicated VRAM: %llu", desc.Description, desc.DedicatedVideoMemory);
+		printf("Adapter: %ls Dedicated VRAM: %llu", desc.Description, desc.DedicatedVideoMemory);
 
 		// Check to see if the adapter supports Direct3D 12, and create device if so
 		if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, _uuidof(ID3D12Device), nullptr)))
@@ -582,33 +582,62 @@ int main()
 	HR_CHECK(command_list->Close());
 
 	//Load Environment Map
-	Texture hdr_equirectangular_texture(device, gpu_memory_allocator, command_queue, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, "data/hdr/Newport_Loft.hdr");
-	hdr_equirectangular_texture.set_name("Env Map (equirectangular)");
+	Texture hdr_equirectangular_texture = TextureBuilder()
+		.from_file("data/hdr/Newport_Loft.hdr")
+		.flip_vertically(true)
+		.with_debug_name("Env Map (equirectangular)")
+		.build(device, gpu_memory_allocator, command_queue);
 
 	const UINT hdr_cube_size = 1024;
 	DXGI_FORMAT cubemap_format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-	Texture hdr_cubemap_texture(device, gpu_memory_allocator, cubemap_format, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, hdr_cube_size, hdr_cube_size, 6);
-	hdr_cubemap_texture.set_name("HDR Cubemap Texture");
-	hdr_cubemap_texture.set_is_cubemap(true);
+	
+	Texture hdr_cubemap_texture = TextureBuilder()
+		.with_format(cubemap_format)
+		.with_resource_flags(D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+		.with_width(hdr_cube_size)
+		.with_height(hdr_cube_size)
+		.with_array_size(6)
+		.with_debug_name("HDR Cubemap Texture")
+		.build(device, gpu_memory_allocator, command_queue);
+	hdr_cubemap_texture.set_is_cubemap(true); //FCS TODO: Remove
 
 	const UINT ibl_cube_size = 16;
-	Texture ibl_cubemap_texture(device, gpu_memory_allocator, cubemap_format, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, ibl_cube_size, ibl_cube_size, 6);
-	ibl_cubemap_texture.set_name("IBL Cubemap Texture");
-	ibl_cubemap_texture.set_is_cubemap(true);
+	Texture ibl_cubemap_texture = TextureBuilder()
+		.with_format(cubemap_format)
+		.with_resource_flags(D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+		.with_width(ibl_cube_size)
+		.with_height(ibl_cube_size)
+		.with_array_size(6)
+		.with_debug_name("IBL Cubemap Texture")
+		.build(device, gpu_memory_allocator, command_queue);
+	ibl_cubemap_texture.set_is_cubemap(true); //FCS TODO: Remove
 
 	const UINT specular_cube_size = 128;
 	const UINT prefilter_mip_levels = 6;
-	Texture specular_cubemap_texture(device, gpu_memory_allocator, cubemap_format, prefilter_mip_levels, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, specular_cube_size, specular_cube_size, 6);
-	specular_cubemap_texture.set_name("Specular Cubemap Texture");
-	specular_cubemap_texture.set_is_cubemap(true);
+	Texture specular_cubemap_texture = TextureBuilder()
+		.with_format(cubemap_format)
+		.with_resource_flags(D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+		.with_width(specular_cube_size)
+		.with_height(specular_cube_size)
+		.with_mip_levels(prefilter_mip_levels)
+		.with_array_size(6)
+		.with_debug_name("Specular Cubemap Texture")
+		.build(device, gpu_memory_allocator, command_queue);
+	specular_cubemap_texture.set_is_cubemap(true); //FCS TODO: Remove
 
 	const UINT specular_lut_size = 512;
 	const DXGI_FORMAT specular_lut_format = DXGI_FORMAT_R16G16_FLOAT;
-	Texture specular_lut_texture(device, gpu_memory_allocator, specular_lut_format, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, specular_lut_size, specular_lut_size, 1);
-	specular_lut_texture.set_name("Specular LUT Texture");
+	Texture specular_lut_texture = TextureBuilder()
+		.with_format(specular_lut_format)
+		.with_resource_flags(D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+		.with_width(specular_lut_size)
+		.with_height(specular_lut_size)
+		.with_debug_name("Specular LUT Texture")
+		.build(device, gpu_memory_allocator, command_queue);
 
 	Texture reference_lut = TextureBuilder()
 		.from_file("data/textures/Reference_Lut.png")
+		.flip_vertically(true)
 		.with_debug_name("REFERENCE LUT")
 		.build(device, gpu_memory_allocator, command_queue);
 
@@ -720,33 +749,6 @@ int main()
 	TConstantBuffer<SceneConstantBuffer> spherical_to_cube_scene(gpu_memory_allocator);
 	TConstantBuffer<InstanceConstantBuffer> spherical_to_cube_instance(gpu_memory_allocator);
 	TConstantBuffer<InstanceConstantBuffer> diffuse_convolution_instance(gpu_memory_allocator);
-
-	//FCS TODO: BEGIN Testing TextureBuilder
-	Texture test_texture = TextureBuilder()
-		.with_format(DXGI_FORMAT_R32G32B32A32_FLOAT)
-		.with_width(24)
-		.with_height(24)
-		.with_debug_name("texture_builder_test")
-		.build(device, gpu_memory_allocator, command_queue);
-
-	//FCS TODO:
-	Texture ldr_file_texture = TextureBuilder()
-		.from_file("data/textures/Reference_Lut.png")
-		.build(device, gpu_memory_allocator, command_queue);
-
-	//FCS TODO:
-	Texture hdr_file_texture = TextureBuilder()
-		.from_file("data/hdr/Frozen_Waterfall.hdr")
-		.build(device, gpu_memory_allocator, command_queue);
-
-	//TODO: builder options for filepath, binary data, etc.
-
-	bindless_resource_manager.register_texture(test_texture);
-	bindless_resource_manager.register_texture(ldr_file_texture);
-	bindless_resource_manager.register_texture(hdr_file_texture);
-
-	// test_texture.release();
-	//FCS TODO: END Testing TextureBuilder
 
 	XMVECTOR cube_cam_pos	  = XMVectorSet(0.f, 0.f, 0.f, 1.f);
 	XMVECTOR cube_cam_forward = XMVectorSet(0.f, 0.f, -1.f, 0.f);

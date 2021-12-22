@@ -11,6 +11,9 @@ using Microsoft::WRL::ComPtr;
 #include <cstdio>
 #include <cassert>
 
+#include <optional>
+using std::optional;
+
 //STB Image
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -37,7 +40,7 @@ struct Texture
 
 	std::string debug_name;
 
-	Texture(D3D12MA::Allocator* gpu_memory_allocator, const D3D12MA::ALLOCATION_DESC& texture_alloc_desc, const D3D12_RESOURCE_DESC& resource_desc)
+	Texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const D3D12MA::ALLOCATION_DESC& texture_alloc_desc, const D3D12_RESOURCE_DESC& resource_desc)
 	{
 		//FCS TODO: Do this in TextureBuilder?
 		const bool can_have_clear_value = (resource_desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
@@ -55,65 +58,20 @@ struct Texture
 			IID_PPV_ARGS(&resource)
 		));
 
-		//FCS TODO: For usage with TextureBuilder... test
-	}
-	
-	Texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format, const UINT mip_levels, const D3D12_RESOURCE_FLAGS flags, const UINT image_width, const UINT image_height, const UINT image_count)
-	{
-		create_texture(device, gpu_memory_allocator, format, mip_levels, flags, image_width, image_height, image_count);
-		set_name("DefaultTexture");
-	}
-
-	//Loads texture from binary data representing an image file-format
-	Texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue, const DXGI_FORMAT format, const UINT mip_levels, const uint8_t* buffer, const int buffer_length)
-	{
-		int image_width, image_height;
-
-		const int desired_channels = 4; //We want an alpha channel
-		stbi_set_flip_vertically_on_load(false); //TODO: arg for this in TextureBuilder
-		if (float* image_data = stbi_loadf_from_memory(buffer, buffer_length, &image_width, &image_height, nullptr, desired_channels))
+		if (resource_desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
 		{
-			create_texture(device, gpu_memory_allocator, format, mip_levels, D3D12_RESOURCE_FLAG_NONE, image_width, image_height, 1);
-		
-			upload_texture_data(device, gpu_memory_allocator, command_queue, desired_channels, image_data, image_width, image_height);
-		
-			stbi_image_free(image_data);
-		}
-
-		//FCS TODO: only load as floats if input data is HDR: stbi_is_hdr(...), stbi_is_hdr_from_memory(...), etc.
-		// if (stbi_uc* image_data = stbi_load_from_memory(buffer, buffer_length, &image_width, &image_height, nullptr, desired_channels))
-		// {
-		// 	create_texture(device, gpu_memory_allocator, format, mip_levels, D3D12_RESOURCE_FLAG_NONE, image_width, image_height, 1);
-		//
-		// 	upload_texture_data(device, gpu_memory_allocator, command_queue, desired_channels, image_data, image_width, image_height);
-		//
-		// 	stbi_image_free(image_data);
-		// }
-	}
-
-	//Loads a single texture from file
-	Texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, ComPtr<ID3D12CommandQueue> command_queue, const DXGI_FORMAT format, const UINT mip_levels, const char* file)
-	{
-		int image_width, image_height;
-		const int desired_channels = 4; //We want an alpha channel
-
-		stbi_set_flip_vertically_on_load(true); //TODO: arg for this in TextureBuilder
-		if (float* image_data = stbi_loadf(file, &image_width, &image_height, nullptr, desired_channels))
-		{
-			create_texture(device, gpu_memory_allocator, format, mip_levels, D3D12_RESOURCE_FLAG_NONE, image_width, image_height, 1);
-
-			upload_texture_data(device, gpu_memory_allocator, command_queue, desired_channels, image_data, image_width, image_height);
-
-			stbi_image_free(image_data);
-			set_name("FileTexture");
-		}
-		else
-		{
-			printf("Failed to load texture\n");
+			create_rtv(device);
 		}
 	}
 
-	void create_texture(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const DXGI_FORMAT format,  const UINT mip_levels, D3D12_RESOURCE_FLAGS flags, const UINT image_width, const UINT image_height, const UINT image_count)
+	void create_texture(const ComPtr<ID3D12Device> device,
+						D3D12MA::Allocator* gpu_memory_allocator,
+						const DXGI_FORMAT format,
+						const UINT mip_levels,
+						const D3D12_RESOURCE_FLAGS flags,
+						const UINT image_width,
+						const UINT image_height,
+						const UINT image_count)
 	{
 		assert(gpu_memory_allocator);
 		assert(image_count > 0);
@@ -218,7 +176,7 @@ struct Texture
 			staging_buffer_allocation->Release();
 	}
 
-	//FCS TODO: Remove this, add "register cubemap texture" to bindless_resource_manager
+	//FCS TODO: Remove this, add "register cubemap texture" to bindless_resource_manager, which will check for 6 array elements
 	void set_is_cubemap(const bool new_is_cubemap)
 	{
 		is_cubemap = new_is_cubemap;
@@ -349,16 +307,6 @@ struct Texture
 	}
 };
 
-//TODO: TextureBuilder:
-/* TextureBuilder()
-.width(4)
-.height(4)
-.format(...)
-.array_count(6)
-.allow_render_target(true)
-.build(device, gpu_memory_allocator);
-*/
-
 struct TextureBuilder
 {
 	D3D12MA::ALLOCATION_DESC texture_alloc_desc = {};
@@ -367,6 +315,7 @@ struct TextureBuilder
 	std::string debug_name;
 	
 	std::vector<uint8_t> binary_file_data;
+	bool flip_vertically_on_load = false;
 	
 	TextureBuilder()
 	{
@@ -458,16 +407,20 @@ struct TextureBuilder
 		return *this;
 	}
 
+	TextureBuilder& flip_vertically(const bool in_flip_vertically_on_load)
+	{
+		flip_vertically_on_load = in_flip_vertically_on_load;
+		return *this;
+	}
+
 	//TODO: from_file and from_binary_data should take in required GPU objects and store refs to them?
 	
 	Texture build(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const ComPtr<ID3D12CommandQueue> command_queue)
 	{
-		if (!binary_file_data.empty())
+		if (!binary_file_data.empty() && command_queue != nullptr)
 		{
-			const int32_t required_components = 4;	 //TODO: arg for this in TextureBuilder?
-			stbi_set_flip_vertically_on_load(false);  //TODO: arg for this in TextureBuilder
-
-			//FCS TODO: Properly handle 
+			const int32_t required_components = 4;
+			stbi_set_flip_vertically_on_load(flip_vertically_on_load);
 			
 			const bool is_file_hdr = stbi_is_hdr_from_memory(binary_file_data.data(), binary_file_data.size());
 			if (is_file_hdr)
@@ -480,7 +433,7 @@ struct TextureBuilder
 					with_format(DXGI_FORMAT_R32G32B32A32_FLOAT); //FCS TODO: Don't assume format
 
 					//FCS TODO: BEGIN DUPLICATE CODE
-					Texture out_texture(gpu_memory_allocator, texture_alloc_desc, texture_desc);
+					Texture out_texture(device, gpu_memory_allocator, texture_alloc_desc, texture_desc);
 
 					if (!debug_name.empty())
 					{
@@ -505,7 +458,7 @@ struct TextureBuilder
 					with_format(DXGI_FORMAT_R8G8B8A8_UNORM_SRGB); //FCS TODO: Don't assume format
 
 					//FCS TODO: BEGIN DUPLICATE CODE
-					Texture out_texture(gpu_memory_allocator, texture_alloc_desc, texture_desc);
+					Texture out_texture(device, gpu_memory_allocator, texture_alloc_desc, texture_desc);
 
 					if (!debug_name.empty())
 					{
@@ -523,7 +476,7 @@ struct TextureBuilder
 		}
 
 		//FCS TODO: BEGIN DUPLICATE CODE
-		Texture out_texture(gpu_memory_allocator, texture_alloc_desc, texture_desc);
+		Texture out_texture(device, gpu_memory_allocator, texture_alloc_desc, texture_desc);
 
 		if (!debug_name.empty())
 		{
@@ -548,8 +501,8 @@ struct BindlessResourceManager
 
 	ComPtr<ID3D12DescriptorHeap> bindless_descriptor_heap;
 
-	Texture invalid_texture;
-	Texture invalid_cubemap;
+	optional<Texture> invalid_texture;
+	optional<Texture> invalid_cubemap;
 
 	std::vector<size_t> texture_free_indices;
 	size_t texture_current_size = 0;
@@ -561,14 +514,27 @@ struct BindlessResourceManager
 
 	BindlessResourceManager(const ComPtr<ID3D12Device> in_device, D3D12MA::Allocator* gpu_memory_allocator)
 		: device(in_device)
-		, invalid_texture(device, gpu_memory_allocator, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, D3D12_RESOURCE_FLAG_NONE, 4, 4, 1) //TODO: Load some meaningful image to denote indexing errors
-		, invalid_cubemap(device, gpu_memory_allocator, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, D3D12_RESOURCE_FLAG_NONE, 4, 4, 6) //TODO: Load some meaningful image to denote indexing errors
 		, cbv_srv_uav_heap_offset(device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV))
 	{
-		//FCS TODO: Eventually this could hold other data as well (CBVs, for example)
-		invalid_cubemap.set_is_cubemap(true);
+		//FCS TODO: Eventually this could hold other bindless resources as well (CBVs, for example)
 
-		invalid_texture.set_name("Invalid Texture");
+		//TODO: Load some meaningful images to denote indexing errors
+		invalid_texture = TextureBuilder()
+			.with_format(DXGI_FORMAT_R32G32B32A32_FLOAT)
+			.with_width(4)
+			.with_height(4)
+			.with_debug_name("Invalid Texture")
+			.build(device, gpu_memory_allocator, nullptr);
+
+		invalid_cubemap = TextureBuilder()
+			.with_format(DXGI_FORMAT_R32G32B32A32_FLOAT)
+			.with_width(4)
+			.with_height(4)
+			.with_array_size(6)
+			.with_debug_name("Invalid Cubemap")
+			.build(device, gpu_memory_allocator, nullptr);
+		
+		invalid_cubemap->set_is_cubemap(true);
 
 		D3D12_DESCRIPTOR_HEAP_DESC bindless_heap_desc = {};
 		bindless_heap_desc.NumDescriptors = BINDLESS_TABLE_SIZE * BINDLESS_DESC_TYPES;
@@ -580,17 +546,17 @@ struct BindlessResourceManager
 		//Init unfilled slots with dummy resource so we don't index into invalid data
 		for (UINT index = 0; index < BINDLESS_TABLE_SIZE; ++index)
 		{
-			create_srv_at_index(invalid_texture, index);
-			create_srv_at_index(invalid_cubemap, index);
+			create_srv_at_index(*invalid_texture, index);
+			create_srv_at_index(*invalid_cubemap, index);
 		}
 	}
 
 	void release()
 	{
-		invalid_texture.release();
-		invalid_cubemap.release();
+		invalid_texture->release();
+		invalid_cubemap->release();
 
-		//TODO: Need to unset all textures bindless indices
+		//TODO: Need to unset all textures' bindless indices
 	}
 
 	void create_srv_at_index(Texture& in_texture, const size_t index) const
@@ -693,7 +659,7 @@ struct BindlessResourceManager
 
 			in_texture_resource.bindless_index = BINDLESS_INVALID_INDEX;
 
-			Texture& invalid_resource = is_cubemap ? invalid_cubemap : invalid_texture;
+			Texture& invalid_resource = is_cubemap ? *invalid_cubemap : *invalid_texture;
 			create_srv_at_index(invalid_resource, index);
 		}
 	}
