@@ -36,6 +36,9 @@
     <ClCompile Include="src\EnkiTS\TaskScheduler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\Remotery\Remotery.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="D3D12_Testbed.rc">
@@ -65,6 +68,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\EnkiTS\LockLessMultiReadPipe.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Remotery\Remotery.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

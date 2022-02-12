@@ -27,10 +27,16 @@ using std::array;
 //GLB Loader
 #include "gltf.h"
 
+//EnkiTS
+#include "EnkiTS/TaskScheduler.h"
+
+//Remotery
+#define RMT_ENABLED 1 //FCS TODO: Hilariously slow in Debug config
+#include "Remotery/Remotery.h"
+
 //D3D12 Helpers
 #include "D3D12MemAlloc/D3D12MemAlloc.h"
 #include "d3dx12.h"
-
 
 #include "d3d12_helpers.h"
 #include "d3d12_texture.h"
@@ -143,7 +149,8 @@ template <typename T, size_t Count>
 struct TConstantBufferArray
 {
 	array<TConstantBuffer<T>, Count> constant_buffers;
-	
+
+	TConstantBufferArray() = default;
 	explicit TConstantBufferArray(D3D12MA::Allocator* gpu_memory_allocator)
 	{
 		for (size_t i = 0; i < Count; ++i)
@@ -207,7 +214,15 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 }
 
 int main()
-{	
+{
+	Remotery* rmt;
+	rmt_CreateGlobalInstance(&rmt);
+	
+	enki::TaskScheduler task_scheduler;
+	task_scheduler.Initialize();
+
+	system(".\\src\\Remotery\\remotery_vis\\index.html");
+	
 	// Create Our Window
 	HINSTANCE h_instance = GetModuleHandle(nullptr);
 
@@ -269,7 +284,7 @@ int main()
 			continue;
 		}
 
-		printf("Adapter: %ls Dedicated VRAM: %llu", desc.Description, desc.DedicatedVideoMemory);
+		printf("Adapter: %ls Dedicated VRAM: %llu \n", desc.Description, desc.DedicatedVideoMemory);
 
 		// Check to see if the adapter supports Direct3D 12, and create device if so
 		if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, _uuidof(ID3D12Device), nullptr)))
@@ -278,7 +293,7 @@ int main()
 			break;
 		}
 	}
-
+	
 	D3D12MA::ALLOCATOR_DESC allocator_desc = {};
 	allocator_desc.pDevice = device.Get();
 	allocator_desc.pAdapter = adapter.Get();
@@ -640,7 +655,7 @@ int main()
 		.flip_vertically(true)
 		.with_debug_name("REFERENCE LUT")
 		.build(device, gpu_memory_allocator, command_queue);
-
+	
 	BindlessResourceManager bindless_resource_manager(device, gpu_memory_allocator);
 
 	//TODO: cubemap specific register function (checks that texture has 6 array elements), remove set_is_cubemap function from "Texture"
@@ -651,7 +666,7 @@ int main()
 	bindless_resource_manager.register_texture(hdr_equirectangular_texture);
 	bindless_resource_manager.register_texture(specular_lut_texture);
 	bindless_resource_manager.register_texture(reference_lut);
-
+	
 	ID3D12DescriptorHeap* bindless_heaps[] = { bindless_resource_manager.bindless_descriptor_heap.Get()};
 
 	//Setup cube
@@ -925,7 +940,7 @@ int main()
 
 	ID3D12CommandList* p_cmd_list = command_list.Get();
 	command_queue->ExecuteCommandLists(1, &p_cmd_list);
-	
+
 	wait_gpu_idle(device, command_queue);
 
 	spherical_to_cube_scene.release();
@@ -946,6 +961,7 @@ int main()
 		optional<Texture> base_color_texture;	
 		optional<Texture> metallic_roughness_texture;
 
+		GpuPrimitive() {}
 		GpuPrimitive(const GpuRenderData& in_render_data, D3D12MA::Allocator* in_gpu_memory_allocator, const optional<Texture>& in_base_color_texture, const optional<Texture>& in_metallic_roughness_texture)
 		: render_data(in_render_data)
 		, constant_buffers(in_gpu_memory_allocator)
@@ -960,8 +976,8 @@ int main()
 	{
 		std::vector<GpuPrimitive> primitives;
 
-		GpuMesh();
-		GpuMesh(const std::vector<GpuPrimitive>& in_primitives)
+		GpuMesh() {}
+		explicit GpuMesh(const std::vector<GpuPrimitive>& in_primitives)
 			: primitives(in_primitives)
 		{}
 	};
@@ -971,30 +987,50 @@ int main()
 		std::vector<GpuMesh> meshes;
 	};
 
+	size_t num_models_to_load = _countof(model_paths);
 	std::vector<GpuModel> models;
+	models.resize(num_models_to_load);
 
-	double total_time = 0.0;
-
-	for (uint32_t i = 0; i < _countof(model_paths); ++i)
+	enki::TaskSet task(num_models_to_load, [&]( enki::TaskSetPartition range, uint32_t threadnum  )
 	{
-		clock_t start_time = clock();
+		const uint32_t i = range.start;
+
+		rmt_ScopedCPUSample(LoadGltfModel, 0);
+
 		GltfAsset gltf_asset;
-		if (!gltf_load_asset(model_paths[i], &gltf_asset))
 		{
-			printf("FAILED TO LOAD GLTF ASSET: %s\n", model_paths[i]);
-			continue;
+			rmt_ScopedCPUSample(gltf_load_asset, 0);
+			if (!gltf_load_asset(model_paths[i], &gltf_asset))
+			{
+				printf("FAILED TO LOAD GLTF ASSET: %s\n", model_paths[i]);
+				return;
+			}
 		}
 		
 		assert(gltf_asset.num_meshes > 0);
 
 		GpuModel model;
+		model.meshes.resize(gltf_asset.num_meshes);
 
-		for (uint32_t mesh_idx = 0; mesh_idx < gltf_asset.num_meshes; ++mesh_idx)
+		//FCS TODO: Parallel gltf mesh load
+		//FCS TODO: Parallel gltf primitive load
+
+		enki::TaskSet load_mesh_task(gltf_asset.num_meshes, [&task_scheduler, &model, &gltf_asset, &device, &gpu_memory_allocator, &command_queue, &bindless_resource_manager]( enki::TaskSetPartition mesh_range, uint32_t threadnum)
 		{
-			std::vector<GpuPrimitive> primitives;
+			const uint32_t mesh_idx = mesh_range.start;
+			rmt_ScopedCPUSample(LoadGltfMesh, 0);
+			
 			GltfMesh* gltf_mesh = &gltf_asset.meshes[mesh_idx];
-			for (uint32_t prim_idx = 0; prim_idx < gltf_mesh->num_primitives; ++prim_idx)
+
+			std::vector<GpuPrimitive> primitives;
+			primitives.resize(gltf_mesh->num_primitives);
+			
+			enki::TaskSet load_prim_task(gltf_mesh->num_primitives, [&primitives, &gltf_mesh, &device, &gpu_memory_allocator, &command_queue, &bindless_resource_manager]( enki::TaskSetPartition prim_range, uint32_t threadnum)
 			{
+				const uint32_t prim_idx = prim_range.start;
+				
+				rmt_ScopedCPUSample(LoadGltfPrimitive, 0);
+				
 				std::vector<GpuVertex> vertices;
 				std::vector<UINT32> indices;
 		
@@ -1012,95 +1048,105 @@ int main()
 				uint8_t* uvs_buffer = gltf_primitive->texcoord0->buffer_view->buffer->data;
 				uvs_buffer += gltf_accessor_get_initial_offset(gltf_primitive->texcoord0);
 				uint32_t uvs_byte_stride = gltf_accessor_get_stride(gltf_primitive->texcoord0);
-	
-				uint32_t vertices_count = gltf_primitive->positions->count;
-				vertices.reserve(vertices_count);
-	
-				for (uint32_t vert_idx = 0; vert_idx < vertices_count; ++vert_idx) 
+
 				{
-					GpuVertex vertex;
-					memcpy(&vertex.position, positions_buffer, positions_byte_stride);
-					memcpy(&vertex.normal, normals_buffer, normals_byte_stride);
-					vertex.color = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
-					memcpy(&vertex.uv, uvs_buffer, uvs_byte_stride);
+					rmt_ScopedCPUSample(LoadPrimitiveVerts, 0);
+					
+					uint32_t vertices_count = gltf_primitive->positions->count;
+					vertices.reserve(vertices_count);
+
+					for (uint32_t vert_idx = 0; vert_idx < vertices_count; ++vert_idx) 
+					{
+						GpuVertex vertex;
+						memcpy(&vertex.position, positions_buffer, positions_byte_stride);
+						memcpy(&vertex.normal, normals_buffer, normals_byte_stride);
+						vertex.color = XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
+						memcpy(&vertex.uv, uvs_buffer, uvs_byte_stride);
 		
-					positions_buffer += positions_byte_stride;
-					normals_buffer += normals_byte_stride;
-					uvs_buffer += uvs_byte_stride;
+						positions_buffer += positions_byte_stride;
+						normals_buffer += normals_byte_stride;
+						uvs_buffer += uvs_byte_stride;
 	
-					vertices.push_back(vertex);
+						vertices.push_back(vertex);
+					}
 				}
-	
-				//Indices
-				uint8_t* indices_buffer = gltf_primitive->indices->buffer_view->buffer->data;
-				indices_buffer += gltf_accessor_get_initial_offset(gltf_primitive->indices);
-				uint32_t indices_byte_stride = gltf_accessor_get_stride(gltf_primitive->indices);
-	
-				uint32_t indices_count = gltf_primitive->indices->count;
-				indices.reserve(indices_count);
-	
-				for (uint32_t indices_idx = 0; indices_idx < indices_count; ++indices_idx) 
+
 				{
-					UINT32 index = 0;
-					memcpy(&index, indices_buffer, indices_byte_stride);
-					indices_buffer += indices_byte_stride;
-					indices.push_back(index);
+					rmt_ScopedCPUSample(LoadPrimitiveIndices, 0);
+					//Indices
+					uint8_t* indices_buffer = gltf_primitive->indices->buffer_view->buffer->data;
+					indices_buffer += gltf_accessor_get_initial_offset(gltf_primitive->indices);
+					uint32_t indices_byte_stride = gltf_accessor_get_stride(gltf_primitive->indices);
+	
+					uint32_t indices_count = gltf_primitive->indices->count;
+					indices.reserve(indices_count);
+	
+					for (uint32_t indices_idx = 0; indices_idx < indices_count; ++indices_idx) 
+					{
+						UINT32 index = 0;
+						memcpy(&index, indices_buffer, indices_byte_stride);
+						indices_buffer += indices_byte_stride;
+						indices.push_back(index);
+					}
 				}
 
 				optional<Texture> base_color_texture;
 				optional<Texture> metallic_roughness_texture;
-				
-				if (gltf_primitive->material)
 				{
-					GltfPbrMetallicRoughness* gltf_pbr = &gltf_primitive->material->pbr_metallic_roughness;
-					if (GltfTexture* gltf_base_color_texture = gltf_pbr->base_color_texture)
-					{
-						GltfBufferView* gltf_buffer_view = gltf_base_color_texture->image->buffer_view;
-						GltfBuffer* gltf_buffer = gltf_buffer_view->buffer;
+					rmt_ScopedCPUSample(LoadPrimitiveMaterial, 0);
 				
-						uint8_t* buffer_ptr = gltf_buffer->data + gltf_buffer_view->byte_offset;
-						size_t byte_length = gltf_buffer_view->byte_length;
+					if (gltf_primitive->material)
+					{
+						GltfPbrMetallicRoughness* gltf_pbr = &gltf_primitive->material->pbr_metallic_roughness;
+						if (GltfTexture* gltf_base_color_texture = gltf_pbr->base_color_texture)
+						{
+							GltfBufferView* gltf_buffer_view = gltf_base_color_texture->image->buffer_view;
+							GltfBuffer* gltf_buffer = gltf_buffer_view->buffer;
+				
+							uint8_t* buffer_ptr = gltf_buffer->data + gltf_buffer_view->byte_offset;
+							size_t byte_length = gltf_buffer_view->byte_length;
 
-						base_color_texture = TextureBuilder().from_binary_data(buffer_ptr, byte_length).build(device, gpu_memory_allocator, command_queue);
-						std::string base_color_string = std::string(gltf_mesh->name) + "_BaseColorTexture";
-						base_color_texture->set_name(base_color_string.c_str());
-						bindless_resource_manager.register_texture(*base_color_texture);
-					}
+							base_color_texture = TextureBuilder().from_binary_data(buffer_ptr, byte_length).build(device, gpu_memory_allocator, command_queue);
+							std::string base_color_string = std::string(gltf_mesh->name) + "_BaseColorTexture";
+							base_color_texture->set_name(base_color_string.c_str());
+							bindless_resource_manager.register_texture(*base_color_texture);
+						}
 				
-					if (GltfTexture* gltf_metallic_roughness_texture = gltf_pbr->metallic_roughness_texture)
-					{
-						GltfBufferView* gltf_buffer_view = gltf_metallic_roughness_texture->image->buffer_view;
-						GltfBuffer* gltf_buffer = gltf_buffer_view->buffer;
+						if (GltfTexture* gltf_metallic_roughness_texture = gltf_pbr->metallic_roughness_texture)
+						{
+							GltfBufferView* gltf_buffer_view = gltf_metallic_roughness_texture->image->buffer_view;
+							GltfBuffer* gltf_buffer = gltf_buffer_view->buffer;
 				
-						uint8_t* buffer_ptr = gltf_buffer->data + gltf_buffer_view->byte_offset;
-						size_t byte_length = gltf_buffer_view->byte_length;
+							uint8_t* buffer_ptr = gltf_buffer->data + gltf_buffer_view->byte_offset;
+							size_t byte_length = gltf_buffer_view->byte_length;
 				
-						metallic_roughness_texture = TextureBuilder().from_binary_data(buffer_ptr, byte_length).build(device, gpu_memory_allocator, command_queue);
-						std::string base_color_string = std::string(gltf_mesh->name) + "_MetallicRoughnessTexture";
-						metallic_roughness_texture->set_name(base_color_string.c_str());
-						bindless_resource_manager.register_texture(*metallic_roughness_texture);
+							metallic_roughness_texture = TextureBuilder().from_binary_data(buffer_ptr, byte_length).build(device, gpu_memory_allocator, command_queue);
+							std::string base_color_string = std::string(gltf_mesh->name) + "_MetallicRoughnessTexture";
+							metallic_roughness_texture->set_name(base_color_string.c_str());
+							bindless_resource_manager.register_texture(*metallic_roughness_texture);
+						}
 					}
 				}
 
-				primitives.emplace_back(GpuPrimitive(GpuRenderData(gpu_memory_allocator, vertices, indices), gpu_memory_allocator, base_color_texture, metallic_roughness_texture));
-			}
+				primitives[prim_idx] = GpuPrimitive(GpuRenderData(gpu_memory_allocator, vertices, indices), gpu_memory_allocator, base_color_texture, metallic_roughness_texture);
+			});
 
-			// GpuMesh mesh;
-			// mesh.primitives = primitives;
-			model.meshes.push_back(GpuMesh(primitives));
-		}
+			task_scheduler.AddTaskSetToPipe(&load_prim_task);
+			task_scheduler.WaitforTask(&load_prim_task);
 
-		models.push_back(model);
+			model.meshes[mesh_idx] = GpuMesh(primitives);
+		});
+
+		task_scheduler.AddTaskSetToPipe(&load_mesh_task);
+		task_scheduler.WaitforTask(&load_mesh_task);
+
+		models[i] = model;
 
 		gltf_free_asset(&gltf_asset);
+	});
 
-		clock_t end_time = clock();
-		const double model_time = static_cast<double>(end_time - start_time) / CLOCKS_PER_SEC;
-		printf("Model Path: \"%s\" Load Time: %f\n", model_paths[i], model_time);
-		total_time += model_time;
-	}
-
-	printf("Total Time Loading Models: %f\n", total_time);
+	task_scheduler.AddTaskSetToPipe( &task );
+	task_scheduler.WaitforTask( &task );
 
 	TConstantBufferArray<SceneConstantBuffer, backbuffer_count> scene_constant_buffers(gpu_memory_allocator);
 
@@ -1166,7 +1212,9 @@ int main()
 	bool vsync_enabled = true;
 	
 	while (!should_close && IsWindow(window))
-	{	
+	{
+		rmt_ScopedCPUSample(LogFrame, 0);
+		
 		RECT client_rect;
 		if (GetClientRect(window, &client_rect))
 		{
@@ -1605,6 +1653,8 @@ int main()
 	ImGui_ImplDX12_Shutdown();
 	ImGui_ImplWin32_Shutdown();
 	ImGui::DestroyContext();
+
+	rmt_DestroyGlobalInstance(rmt);
 	
 	return 0;
 }

@@ -3,6 +3,8 @@
 #include <wrl.h>
 using Microsoft::WRL::ComPtr;
 
+#include <mutex>
+
 #include <d3d12.h>
 #include <D3Dcompiler.h>
 #include "D3D12MemAlloc/D3D12MemAlloc.h"
@@ -17,6 +19,8 @@ using std::optional;
 //STB Image
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+
+#include "Remotery/Remotery.h"
 
 #include "d3d12_helpers.h"
 
@@ -417,16 +421,17 @@ struct TextureBuilder
 	
 	Texture build(const ComPtr<ID3D12Device> device, D3D12MA::Allocator* gpu_memory_allocator, const ComPtr<ID3D12CommandQueue> command_queue)
 	{
+		rmt_ScopedCPUSample(TextureBuilder_build, 0);
 		if (!binary_file_data.empty() && command_queue != nullptr)
 		{
 			const int32_t required_components = 4;
 			stbi_set_flip_vertically_on_load(flip_vertically_on_load);
 			
-			const bool is_file_hdr = stbi_is_hdr_from_memory(binary_file_data.data(), binary_file_data.size());
+			const bool is_file_hdr = stbi_is_hdr_from_memory(binary_file_data.data(), static_cast<int>(binary_file_data.size()));
 			if (is_file_hdr)
 			{
 				int image_width, image_height, image_components;
-				if (float* image_data = stbi_loadf_from_memory(binary_file_data.data(), binary_file_data.size(), &image_width, &image_height, &image_components, required_components))
+				if (float* image_data = stbi_loadf_from_memory(binary_file_data.data(), static_cast<int>(binary_file_data.size()), &image_width, &image_height, &image_components, required_components))
 				{
 					with_width(image_width);
 					with_height(image_height);
@@ -451,7 +456,7 @@ struct TextureBuilder
 			else
 			{
 				int image_width, image_height, image_components;
-				if (stbi_uc* image_data = stbi_load_from_memory(binary_file_data.data(), binary_file_data.size(), &image_width, &image_height, &image_components, required_components))
+				if (stbi_uc* image_data = stbi_load_from_memory(binary_file_data.data(), static_cast<int>(binary_file_data.size()), &image_width, &image_height, &image_components, required_components))
 				{
 					with_width(image_width);
 					with_height(image_height);
@@ -511,6 +516,8 @@ struct BindlessResourceManager
 	size_t cubemap_current_size = 0;
 
 	UINT cbv_srv_uav_heap_offset;
+
+	std::mutex manager_mutex;
 
 	BindlessResourceManager(const ComPtr<ID3D12Device> in_device, D3D12MA::Allocator* gpu_memory_allocator)
 		: device(in_device)
@@ -597,6 +604,8 @@ struct BindlessResourceManager
 
 	void register_texture(Texture& in_texture_resource)
 	{
+		std::scoped_lock lock(manager_mutex);
+		
 		const bool is_cubemap = in_texture_resource.is_cubemap;
 
 		if (in_texture_resource.bindless_index != BINDLESS_INVALID_INDEX)
@@ -634,7 +643,8 @@ struct BindlessResourceManager
 
 	void unregister_texture(Texture& in_texture_resource)
 	{
-
+		std::scoped_lock lock(manager_mutex);
+		
 		if (in_texture_resource.bindless_index != BINDLESS_INVALID_INDEX)
 		{
 			const size_t index = in_texture_resource.bindless_index;

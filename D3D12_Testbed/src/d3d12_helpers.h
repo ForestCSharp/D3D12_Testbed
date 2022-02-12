@@ -64,6 +64,12 @@ struct GpuRenderData
 	D3D12MA::Allocation* index_buffer_allocation = nullptr;
 	D3D12_INDEX_BUFFER_VIEW index_buffer_view;
 
+	GpuRenderData()
+	{
+		vertex_buffer_view = {};
+		index_buffer_view = {};
+	}
+
 	template <typename T>
 	GpuRenderData(D3D12MA::Allocator* gpu_memory_allocator, std::vector<T> vertices, std::vector<UINT32> indices)
 	{
