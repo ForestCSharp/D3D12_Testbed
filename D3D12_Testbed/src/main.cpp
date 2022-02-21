@@ -215,14 +215,14 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 int main()
 {
-	Remotery* rmt;
+	Remotery* rmt = nullptr;
 	rmt_CreateGlobalInstance(&rmt);
-	
+
+	//_popen(".\\src\\Remotery\\remotery_vis\\index.html", "rt");
+
 	enki::TaskScheduler task_scheduler;
 	task_scheduler.Initialize();
-
-	system(".\\src\\Remotery\\remotery_vis\\index.html");
-	
+		
 	// Create Our Window
 	HINSTANCE h_instance = GetModuleHandle(nullptr);
 
@@ -512,7 +512,9 @@ int main()
 		}
 	};
 
+	rmt_BeginCPUSample(CreateFrameResources, 0);
 	FrameResources frame_resources(width, height, factory, device, gpu_memory_allocator, command_queue, window);
+	rmt_EndCPUSample();
 
 	//TODO: Helpers for this in BindlessResourceManager?
 	ComPtr<ID3D12RootSignature> bindless_root_signature;
@@ -558,6 +560,7 @@ int main()
 		HR_CHECK(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(&bindless_root_signature)));
 	}
 
+	rmt_BeginCPUSample(BuildPipelines, 0);
 	ComPtr<ID3D12PipelineState> pbr_pipeline_state = GraphicsPipelineBuilder()
 		.with_root_signature(bindless_root_signature)
 		.with_vs(compile_shader(L"data/shaders/pbr.hlsl", "vs_main", "vs_5_1"))
@@ -590,7 +593,9 @@ int main()
 	    .with_rtv_formats({DXGI_FORMAT_R8G8B8A8_UNORM_SRGB})
 	    .with_debug_name(L"texture_viewer_pipeline_state")
 	    .build(device);
+	rmt_EndCPUSample();
 
+	rmt_BeginCPUSample(SetupEnvironmentTextures, 0);
 	// 12. Create Command list using command allocator and pipeline state, and close it (we'll record it later)
 	ComPtr<ID3D12GraphicsCommandList> command_list;
 	HR_CHECK(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocators[frame_resources.frame_index].Get(), pbr_pipeline_state.Get(), IID_PPV_ARGS(&command_list)));
@@ -655,6 +660,7 @@ int main()
 		.flip_vertically(true)
 		.with_debug_name("REFERENCE LUT")
 		.build(device, gpu_memory_allocator, command_queue);
+	rmt_EndCPUSample();
 	
 	BindlessResourceManager bindless_resource_manager(device, gpu_memory_allocator);
 
@@ -668,7 +674,7 @@ int main()
 	bindless_resource_manager.register_texture(reference_lut);
 	
 	ID3D12DescriptorHeap* bindless_heaps[] = { bindless_resource_manager.bindless_descriptor_heap.Get()};
-
+	
 	//Setup cube
 	//Note: We render all faces at once, so we really only need one "Face" to rasterize (4 verts, 6 indices)
 	//	    Then, after its rasterized, we rotate it's world pos to sample the correct portion of the equirectangular map
@@ -721,45 +727,74 @@ int main()
 	auto render_to_cubemap_rtv_formats = { cubemap_format, cubemap_format, cubemap_format,
 																	   cubemap_format, cubemap_format, cubemap_format };
 
-	ComPtr<ID3D12PipelineState> spherical_to_cube_pipeline_state = GraphicsPipelineBuilder()
-        .with_root_signature(bindless_root_signature)
-        .with_vs(compile_shader(L"data/shaders/render_to_cubemap.hlsl", "vs_main", "vs_5_1"))
-        .with_ps(compile_shader(L"data/shaders/render_to_cubemap.hlsl", "ps_main", "ps_5_1"))
-        .with_depth_enabled(false)
-        .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
-        .with_rtv_formats(render_to_cubemap_rtv_formats)
-		.with_debug_name(L"spherical_to_cube_pipeline_state")
-        .build(device);
+	rmt_BeginCPUSample(SetupInitialPipelineStates, 0); //FCS TODO: ! This is taking 5 seconds. Add enki tasks here
 
-	ComPtr<ID3D12PipelineState> diffuse_convolution_pipeline_state = GraphicsPipelineBuilder()
-	    .with_root_signature(bindless_root_signature)
-	    .with_vs(compile_shader(L"data/shaders/diffuse_convolution.hlsl", "vs_main", "vs_5_1"))
-	    .with_ps(compile_shader(L"data/shaders/diffuse_convolution.hlsl", "ps_main", "ps_5_1"))
-	    .with_depth_enabled(false)
-	    .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
-	    .with_rtv_formats(render_to_cubemap_rtv_formats)
-	    .with_debug_name(L"diffuse_convolution_pipeline_state")
-	    .build(device);
+	//FCS TODO: Simple Lambda (passes thru index) helper to immediately add. Then can wait later
 
-	ComPtr<ID3D12PipelineState> specular_prefilter_pipeline_state = GraphicsPipelineBuilder()
-        .with_root_signature(bindless_root_signature)
-        .with_vs(compile_shader(L"data/shaders/specular_prefilter.hlsl", "vs_main", "vs_5_1"))
-        .with_ps(compile_shader(L"data/shaders/specular_prefilter.hlsl", "ps_main", "ps_5_1"))
-        .with_depth_enabled(false)
-        .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
-        .with_rtv_formats(render_to_cubemap_rtv_formats)
-        .with_debug_name(L"specular_prefilter_pipeline_state")
-        .build(device);
+	ComPtr<ID3D12PipelineState> spherical_to_cube_pipeline_state;
+	enki::TaskSet build_spherical_to_cube_pipeline_task( 1, [&]( enki::TaskSetPartition, uint32_t)
+	{
+		rmt_ScopedCPUSample(BuildSphericalToCubePipeline, 0);
+		spherical_to_cube_pipeline_state = GraphicsPipelineBuilder()
+			.with_root_signature(bindless_root_signature)
+			.with_vs(compile_shader(L"data/shaders/render_to_cubemap.hlsl", "vs_main", "vs_5_1"))
+			.with_ps(compile_shader(L"data/shaders/render_to_cubemap.hlsl", "ps_main", "ps_5_1"))
+			.with_depth_enabled(false)
+			.with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
+			.with_rtv_formats(render_to_cubemap_rtv_formats)
+			.with_debug_name(L"spherical_to_cube_pipeline_state")
+			.build(device);
+	});
+	task_scheduler.AddTaskSetToPipe(&build_spherical_to_cube_pipeline_task);
 
-	ComPtr<ID3D12PipelineState> specular_lut_pipeline_state = GraphicsPipelineBuilder()
-        .with_root_signature(bindless_root_signature)
-        .with_vs(compile_shader(L"data/shaders/brdf_lut.hlsl", "vs_main", "vs_5_1"))
-        .with_ps(compile_shader(L"data/shaders/brdf_lut.hlsl", "ps_main", "ps_5_1"))
-        .with_depth_enabled(false)
-        .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
-        .with_rtv_formats({specular_lut_format})
-        .with_debug_name(L"specular_lut_pipeline_state")
-        .build(device);
+	ComPtr<ID3D12PipelineState> diffuse_convolution_pipeline_state;
+	enki::TaskSet build_diffuse_convolution_pipeline_task( 1, [&]( enki::TaskSetPartition, uint32_t)
+	{
+		rmt_ScopedCPUSample(BuildDiffuseConvolutionPipeline, 0);
+		diffuse_convolution_pipeline_state = GraphicsPipelineBuilder()
+			.with_root_signature(bindless_root_signature)
+			.with_vs(compile_shader(L"data/shaders/diffuse_convolution.hlsl", "vs_main", "vs_5_1"))
+			.with_ps(compile_shader(L"data/shaders/diffuse_convolution.hlsl", "ps_main", "ps_5_1"))
+			.with_depth_enabled(false)
+			.with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
+			.with_rtv_formats(render_to_cubemap_rtv_formats)
+			.with_debug_name(L"diffuse_convolution_pipeline_state")
+			.build(device);
+	});
+	task_scheduler.AddTaskSetToPipe(&build_diffuse_convolution_pipeline_task);
+
+	
+	ComPtr<ID3D12PipelineState> specular_prefilter_pipeline_state;
+	enki::TaskSet build_specular_prefilter_pipeline_task( 1, [&]( enki::TaskSetPartition, uint32_t)
+	{
+		rmt_ScopedCPUSample(BuildSpecularPrefilterPipeline, 0);
+		specular_prefilter_pipeline_state = GraphicsPipelineBuilder()
+			.with_root_signature(bindless_root_signature)
+			.with_vs(compile_shader(L"data/shaders/specular_prefilter.hlsl", "vs_main", "vs_5_1"))
+			.with_ps(compile_shader(L"data/shaders/specular_prefilter.hlsl", "ps_main", "ps_5_1"))
+			.with_depth_enabled(false)
+			.with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
+			.with_rtv_formats(render_to_cubemap_rtv_formats)
+			.with_debug_name(L"specular_prefilter_pipeline_state")
+			.build(device);
+	});
+	task_scheduler.AddTaskSetToPipe(&build_specular_prefilter_pipeline_task);
+
+	ComPtr<ID3D12PipelineState> specular_lut_pipeline_state;
+	enki::TaskSet build_specular_lut_pipeline_task( 1, [&]( enki::TaskSetPartition, uint32_t)
+	{
+		rmt_ScopedCPUSample(BuildSpecularLutPipeline, 0);
+		specular_lut_pipeline_state = GraphicsPipelineBuilder()
+	        .with_root_signature(bindless_root_signature)
+	        .with_vs(compile_shader(L"data/shaders/brdf_lut.hlsl", "vs_main", "vs_5_1"))
+	        .with_ps(compile_shader(L"data/shaders/brdf_lut.hlsl", "ps_main", "ps_5_1"))
+	        .with_depth_enabled(false)
+	        .with_primitive_topology(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
+	        .with_rtv_formats({specular_lut_format})
+	        .with_debug_name(L"specular_lut_pipeline_state")
+	        .build(device);
+	});
+	task_scheduler.AddTaskSetToPipe(&build_specular_lut_pipeline_task);
 
 	TConstantBuffer<SceneConstantBuffer> spherical_to_cube_scene(gpu_memory_allocator);
 	TConstantBuffer<InstanceConstantBuffer> spherical_to_cube_instance(gpu_memory_allocator);
@@ -775,7 +810,6 @@ int main()
 	
 	spherical_to_cube_instance.data().texture_index = hdr_equirectangular_texture.bindless_index;
 	diffuse_convolution_instance.data().texture_index = hdr_cubemap_texture.bindless_index;
-
 	
 	TConstantBufferArray<SpecularPrefilterConstantBuffer, prefilter_mip_levels> specular_prefilter_instance(gpu_memory_allocator);
 	for (size_t mip_index = 0; mip_index < prefilter_mip_levels; ++mip_index)
@@ -784,6 +818,16 @@ int main()
 		data.texture_index = hdr_cubemap_texture.bindless_index;
 		data.roughness = static_cast<float>(mip_index) / static_cast<float>(prefilter_mip_levels - 1);
 	}
+
+	rmt_BeginCPUSample(InitialCommandListRecordAndExecution, 0);
+
+	//FCS TODO: Move even farther down
+	task_scheduler.WaitforTask(&build_spherical_to_cube_pipeline_task);
+	task_scheduler.WaitforTask(&build_diffuse_convolution_pipeline_task);
+	task_scheduler.WaitforTask(&build_specular_prefilter_pipeline_task);
+	task_scheduler.WaitforTask(&build_specular_lut_pipeline_task);
+
+	rmt_EndCPUSample();
 
 	//Reset command list using this frame's command allocator
 	HR_CHECK(command_allocators[frame_resources.frame_index]->Reset());
@@ -942,6 +986,8 @@ int main()
 	command_queue->ExecuteCommandLists(1, &p_cmd_list);
 
 	wait_gpu_idle(device, command_queue);
+
+	rmt_EndCPUSample();
 
 	spherical_to_cube_scene.release();
 	spherical_to_cube_instance.release();
@@ -1144,9 +1190,9 @@ int main()
 
 		gltf_free_asset(&gltf_asset);
 	});
-
-	task_scheduler.AddTaskSetToPipe( &task );
-	task_scheduler.WaitforTask( &task );
+	
+	task_scheduler.AddTaskSetToPipe(&task);
+	task_scheduler.WaitforTask(&task);
 
 	TConstantBufferArray<SceneConstantBuffer, backbuffer_count> scene_constant_buffers(gpu_memory_allocator);
 

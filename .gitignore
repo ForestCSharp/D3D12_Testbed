@@ -28,3 +28,6 @@ ipch
 
 #ImGui
 imgui.ini
+
+#D3D12 Compiled Shaders
+*.ID3DBlob

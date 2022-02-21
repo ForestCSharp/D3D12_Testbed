@@ -8,6 +8,8 @@ using Microsoft::WRL::ComPtr;
 #include "D3D12MemAlloc/D3D12MemAlloc.h"
 #include "d3dx12.h"
 
+#include "Remotery/Remotery.h"
+
 #include <cstdio>
 #include <cassert>
 
@@ -21,21 +23,41 @@ exit(-1);\
 }\
 }\
 
+#include <cstdlib>
+
 // We do not intend to read from these resources on the CPU.
 static const D3D12_RANGE no_read_range = { 0, 0 };
 
 inline ComPtr<ID3DBlob> compile_shader(const LPCWSTR file_name, const LPCSTR entry_point, const LPCSTR target)
 {
-	const UINT shader_compile_flags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+	rmt_ScopedCPUSample(compile_shader, 0);
 
 	ComPtr<ID3DBlob> out_shader;
-	ID3DBlob* error_messages;
-	const HRESULT hr = D3DCompileFromFile(file_name, nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, entry_point, target, shader_compile_flags, 0, &out_shader, &error_messages);
 
-	if (FAILED(hr) && error_messages)
+	wchar_t entry_point_wide[255];
+	mbstowcs(entry_point_wide, entry_point, strlen(entry_point));
+	std::wstring compiled_file_name = std::wstring(file_name) + L"." + entry_point_wide + L".ID3DBlob";
+
+	//FCS TODO: Only recompile if missing (done) OR changed (TODO) (store file hash + blob in binary file)
+	const bool file_missing = GetFileAttributes(compiled_file_name.c_str()) == INVALID_FILE_ATTRIBUTES && GetLastError() == ERROR_FILE_NOT_FOUND;
+	if (file_missing)
 	{
-		const char* error_message = static_cast<const char*>(error_messages->GetBufferPointer());
-		printf("CompileShader Error: %s\n", error_message);
+		const UINT shader_compile_flags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+
+		ID3DBlob* error_messages;
+		const HRESULT hr = D3DCompileFromFile(file_name, nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, entry_point, target, shader_compile_flags, 0, &out_shader, &error_messages);
+
+		if (FAILED(hr) && error_messages)
+		{
+			const char* error_message = static_cast<const char*>(error_messages->GetBufferPointer());
+			printf("CompileShader Error: %s\n", error_message);
+		}
+
+		D3DWriteBlobToFile(out_shader.Get(), compiled_file_name.c_str(), TRUE);
+	}
+	else
+	{
+		D3DReadFileToBlob(compiled_file_name.c_str(), &out_shader);
 	}
 
 	return out_shader;
