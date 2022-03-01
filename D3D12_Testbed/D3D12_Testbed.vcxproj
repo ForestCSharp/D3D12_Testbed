@@ -99,13 +99,13 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <IncludePath>$(ProjectDir)\third_party\DearImGui;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir)\src\EASTL\include;$(ProjectDir)\third_party\DearImGui;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <IncludePath>$(ProjectDir)\third_party\DearImGui;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir)\src\EASTL\include;$(ProjectDir)\third_party\DearImGui;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseTiny|x64'">
-    <IncludePath>$(ProjectDir)\third_party\DearImGui;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir)\src\EASTL\include;$(ProjectDir)\third_party\DearImGui;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -204,6 +204,16 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\D3D12MemAlloc\D3D12MemAlloc.cpp" />
+    <ClCompile Include="src\EASTL\source\allocator_eastl.cpp" />
+    <ClCompile Include="src\EASTL\source\assert.cpp" />
+    <ClCompile Include="src\EASTL\source\atomic.cpp" />
+    <ClCompile Include="src\EASTL\source\fixed_pool.cpp" />
+    <ClCompile Include="src\EASTL\source\hashtable.cpp" />
+    <ClCompile Include="src\EASTL\source\intrusive_list.cpp" />
+    <ClCompile Include="src\EASTL\source\numeric_limits.cpp" />
+    <ClCompile Include="src\EASTL\source\red_black_tree.cpp" />
+    <ClCompile Include="src\EASTL\source\string.cpp" />
+    <ClCompile Include="src\EASTL\source\thread_support.cpp" />
     <ClCompile Include="src\EnkiTS\TaskScheduler.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\Remotery\Remotery.c" />

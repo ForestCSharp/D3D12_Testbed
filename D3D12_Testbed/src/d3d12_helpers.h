@@ -34,8 +34,8 @@ inline ComPtr<ID3DBlob> compile_shader(const LPCWSTR file_name, const LPCSTR ent
 
 	ComPtr<ID3DBlob> out_shader;
 
-	wchar_t entry_point_wide[255];
-	mbstowcs(entry_point_wide, entry_point, strlen(entry_point));
+	wchar_t entry_point_wide[255] = {};
+	mbstowcs(entry_point_wide, entry_point, strlen(entry_point)); //FCS TODO: Broken in debug builds only
 	std::wstring compiled_file_name = std::wstring(file_name) + L"." + entry_point_wide + L".ID3DBlob";
 
 	//FCS TODO: Only recompile if missing (done) OR changed (TODO) (store file hash + blob in binary file)
@@ -93,7 +93,7 @@ struct GpuRenderData
 	}
 
 	template <typename T>
-	GpuRenderData(D3D12MA::Allocator* gpu_memory_allocator, std::vector<T> vertices, std::vector<UINT32> indices)
+	GpuRenderData(D3D12MA::Allocator* gpu_memory_allocator, vector<T> vertices, vector<UINT32> indices)
 	{
 		static_assert(!std::is_pointer<T>(), "vertices must be an array to some non-pointer type");
 		
@@ -197,7 +197,7 @@ struct GraphicsPipelineBuilder
 
 	ComPtr<ID3DBlob> vs_bytecode;
 	ComPtr<ID3DBlob> ps_bytecode;
-	std::vector<D3D12_INPUT_ELEMENT_DESC> input_element_descs;
+	vector<D3D12_INPUT_ELEMENT_DESC> input_element_descs;
 
 	std::wstring debug_name;
 
@@ -270,7 +270,7 @@ struct GraphicsPipelineBuilder
 	GraphicsPipelineBuilder& with_rtv_formats(const std::initializer_list<DXGI_FORMAT> in_rtv_formats)
 	{
 		assert(in_rtv_formats.size() <= 8);
-		std::vector<DXGI_FORMAT> rtv_formats(in_rtv_formats);
+		vector<DXGI_FORMAT> rtv_formats(in_rtv_formats);
 		
 		pso_desc.NumRenderTargets = static_cast<UINT>(rtv_formats.size());
 		for (UINT i = 0; i < pso_desc.NumRenderTargets; ++i)
@@ -298,14 +298,6 @@ struct GraphicsPipelineBuilder
 		pso_desc.PrimitiveTopologyType = in_primitive_topology;
 		return *this;
 	}
-
-	// GraphicsPipelineBuilder& with_input_layout(const std::vector<D3D12_INPUT_ELEMENT_DESC> in_element_descs)
-	// {
-	// 	input_element_descs = in_element_descs;
-	// 	pso_desc.InputLayout.NumElements = input_element_descs.size();
-	// 	pso_desc.InputLayout.pInputElementDescs = input_element_descs.data();
-	// 	return *this;
-	// }
 
 	GraphicsPipelineBuilder& with_cull_mode(const D3D12_CULL_MODE in_cull_mode)
 	{

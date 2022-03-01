@@ -13,12 +13,24 @@
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
 
-//Std Lib
-#include <optional>
-using std::optional;
-#include <vector>
-#include <array>
-using std::array;
+//EASTL
+#include <EASTL/optional.h>
+using eastl::optional;
+#include <EASTL/array.h>
+using eastl::array;
+#include <EASTL/vector.h>
+using eastl::vector;
+
+//EASTL requires you to define these two operator news
+void* __cdecl operator new[](size_t size, const char* pName, int flags, unsigned debugFlags, const char* file, int line)
+{
+	return new uint8_t[size];
+}
+
+void* __cdecl operator new[](size_t size, size_t alignment, size_t alignmentOffset, const char* pName, int flags, unsigned debugFlags, const char* file, int line)
+{
+	return new uint8_t[size];
+}
 
 //C
 #include "time.h"
@@ -46,6 +58,9 @@ using std::array;
 
 #include "../third_party/DearImGui/backends/imgui_impl_win32.h"
 #include "../third_party/DearImGui/backends/imgui_impl_dx12.h"
+
+#define min(a,b) (((a)<(b))?(a):(b))
+#define max(a,b) (((a)>(b))?(a):(b)) 
 
 struct SceneConstantBuffer
 {
@@ -544,7 +559,7 @@ int main()
 		cube_range.RegisterSpace = TEXTURE_CUBE_REGISTER_SPACE;
 		root_parameters[3].InitAsDescriptorTable(1, &cube_range);
 
-		std::array<CD3DX12_STATIC_SAMPLER_DESC, 1> samplers;
+		array<CD3DX12_STATIC_SAMPLER_DESC, 1> samplers;
 		samplers[0].Init(0, D3D12_FILTER_MIN_MAG_MIP_LINEAR);
 		samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
 		samplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -678,7 +693,7 @@ int main()
 	//Setup cube
 	//Note: We render all faces at once, so we really only need one "Face" to rasterize (4 verts, 6 indices)
 	//	    Then, after its rasterized, we rotate it's world pos to sample the correct portion of the equirectangular map
-	std::vector<GpuVertex> cube_vertices =
+	vector<GpuVertex> cube_vertices =
 	{
 		{{-1.0, -1.0,  1.0}, {}, {}},
 		{{1.0, -1.0,  1.0}, {}, {}},
@@ -690,7 +705,7 @@ int main()
 		{{-1.0,  1.0,  -1.0}, {}, {}},
 	};
 
-	std::vector<UINT32> cube_indices =
+	vector<UINT32> cube_indices =
 	{
 		0, 1, 2, 2, 3, 0, // front
         1, 5, 6, 6, 2, 1, // right
@@ -709,7 +724,7 @@ int main()
 		XMFLOAT2 uv;
 	};
 
-	std::vector<QuadVertex> quad_vertices =
+	vector<QuadVertex> quad_vertices =
 	{
 		{{-1.0f, 1.0f}, {0.0f, 0.0f}},
 		{{-1.0f,-1.0f}, {0.0f, 1.0f}},
@@ -717,7 +732,7 @@ int main()
 		{{ 1.0f,-1.0f}, {1.0f, 1.0f}},
 	};
 
-	std::vector<UINT> quad_indices =
+	vector<UINT> quad_indices =
 	{
 		0, 1, 2, 1, 2, 3
     };
@@ -1020,21 +1035,21 @@ int main()
 
 	struct GpuMesh
 	{
-		std::vector<GpuPrimitive> primitives;
+		vector<GpuPrimitive> primitives;
 
 		GpuMesh() {}
-		explicit GpuMesh(const std::vector<GpuPrimitive>& in_primitives)
+		explicit GpuMesh(const vector<GpuPrimitive>& in_primitives)
 			: primitives(in_primitives)
 		{}
 	};
 
 	struct GpuModel
 	{
-		std::vector<GpuMesh> meshes;
+		vector<GpuMesh> meshes;
 	};
 
 	size_t num_models_to_load = _countof(model_paths);
-	std::vector<GpuModel> models;
+	vector<GpuModel> models;
 	models.resize(num_models_to_load);
 
 	enki::TaskSet task(num_models_to_load, [&]( enki::TaskSetPartition range, uint32_t threadnum  )
@@ -1068,7 +1083,7 @@ int main()
 			
 			GltfMesh* gltf_mesh = &gltf_asset.meshes[mesh_idx];
 
-			std::vector<GpuPrimitive> primitives;
+			vector<GpuPrimitive> primitives;
 			primitives.resize(gltf_mesh->num_primitives);
 			
 			enki::TaskSet load_prim_task(gltf_mesh->num_primitives, [&primitives, &gltf_mesh, &device, &gpu_memory_allocator, &command_queue, &bindless_resource_manager]( enki::TaskSetPartition prim_range, uint32_t threadnum)
@@ -1077,8 +1092,8 @@ int main()
 				
 				rmt_ScopedCPUSample(LoadGltfPrimitive, 0);
 				
-				std::vector<GpuVertex> vertices;
-				std::vector<UINT32> indices;
+				vector<GpuVertex> vertices;
+				vector<UINT32> indices;
 		
 				GltfPrimitive* gltf_primitive = &gltf_mesh->primitives[prim_idx];
 	
@@ -1387,7 +1402,7 @@ int main()
 				const char* debug_texture_name = debug_texture ? debug_texture->get_name() : "None Selected";
 				if (ImGui::BeginCombo("Texture to View", debug_texture_name))
 				{
-					std::vector<Texture*> debug_view_textures = {&specular_lut_texture, &reference_lut};
+					vector<Texture*> debug_view_textures = {&specular_lut_texture, &reference_lut};
 
 					for (auto& model : models)
 					{

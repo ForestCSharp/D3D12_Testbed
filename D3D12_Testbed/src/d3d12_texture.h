@@ -13,8 +13,8 @@ using Microsoft::WRL::ComPtr;
 #include <cstdio>
 #include <cassert>
 
-#include <optional>
-using std::optional;
+#include <EASTL/optional.h>
+using eastl::optional;
 
 //STB Image
 #define STB_IMAGE_IMPLEMENTATION
