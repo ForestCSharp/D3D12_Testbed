@@ -43,7 +43,7 @@ void* __cdecl operator new[](size_t size, size_t alignment, size_t alignmentOffs
 #include "EnkiTS/TaskScheduler.h"
 
 //Remotery
-#define RMT_ENABLED 1 //FCS TODO: Hilariously slow in Debug config
+#define RMT_ENABLED 0 //FCS TODO: Deadlocks in Debug config
 #include "Remotery/Remotery.h"
 
 //D3D12 Helpers

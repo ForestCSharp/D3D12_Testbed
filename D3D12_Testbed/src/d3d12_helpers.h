@@ -35,8 +35,8 @@ inline ComPtr<ID3DBlob> compile_shader(const LPCWSTR file_name, const LPCSTR ent
 	ComPtr<ID3DBlob> out_shader;
 
 	wchar_t entry_point_wide[255] = {};
-	mbstowcs(entry_point_wide, entry_point, strlen(entry_point)); //FCS TODO: Broken in debug builds only
-	std::wstring compiled_file_name = std::wstring(file_name) + L"." + entry_point_wide + L".ID3DBlob";
+	mbstowcs(entry_point_wide, entry_point, strlen(entry_point));
+	const std::wstring compiled_file_name = std::wstring(file_name) + L"." + entry_point_wide + L".ID3DBlob";
 
 	//FCS TODO: Only recompile if missing (done) OR changed (TODO) (store file hash + blob in binary file)
 	const bool file_missing = GetFileAttributes(compiled_file_name.c_str()) == INVALID_FILE_ATTRIBUTES && GetLastError() == ERROR_FILE_NOT_FOUND;
